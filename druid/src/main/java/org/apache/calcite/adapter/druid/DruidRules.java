@@ -39,6 +39,7 @@ import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.rex.RexShuttle;
 import org.apache.calcite.rex.RexUtil;
 import org.apache.calcite.runtime.PredicateImpl;
+import org.apache.calcite.sql.SqlKind;
 import org.apache.calcite.util.ImmutableBitSet;
 import org.apache.calcite.util.Pair;
 import org.apache.calcite.util.Util;
@@ -166,7 +167,12 @@ public class DruidRules {
             // Complex predicate, transformation currently not supported
             return null;
           }
-          timeRangeNodes.add(conj);
+          if (((RexCall) conj).getOperands().get(0).getKind().equals(SqlKind.EXTRACT)) {
+            //case extraction on time will be added as filter
+            otherNodes.add(conj);
+          } else {
+            timeRangeNodes.add(conj);
+          }
         } else {
           for (Integer i : visitor.inputPosReferenced) {
             if (input.druidTable.metricFieldNames.contains(
