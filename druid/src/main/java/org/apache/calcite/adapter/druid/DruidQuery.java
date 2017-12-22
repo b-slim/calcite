@@ -57,9 +57,12 @@ import org.apache.calcite.rex.RexUtil;
 import org.apache.calcite.runtime.Hook;
 import org.apache.calcite.schema.ScannableTable;
 import org.apache.calcite.sql.SqlKind;
+import org.apache.calcite.sql.SqlOperator;
+import org.apache.calcite.sql.fun.SqlStdOperatorTable;
 import org.apache.calcite.sql.type.SqlTypeFamily;
 import org.apache.calcite.sql.type.SqlTypeName;
 import org.apache.calcite.sql.validate.SqlValidatorUtil;
+import org.apache.calcite.util.DateTimeStringUtils;
 import org.apache.calcite.util.ImmutableBitSet;
 import org.apache.calcite.util.Litmus;
 import org.apache.calcite.util.Pair;
@@ -72,8 +75,10 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Function;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 
 import org.joda.time.Interval;
@@ -85,11 +90,14 @@ import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Properties;
 import java.util.Set;
 import java.util.TimeZone;
 import java.util.regex.Pattern;
+
+import javax.annotation.Nullable;
 
 import static org.apache.calcite.sql.SqlKind.INPUT_REF;
 
@@ -98,12 +106,65 @@ import static org.apache.calcite.sql.SqlKind.INPUT_REF;
  */
 public class DruidQuery extends AbstractRelNode implements BindableRel {
 
+  /**
+   * Provides a standard list of supported Calcite operators that can be converted to
+   * Druid Expressions. This can be used as is or re-adapted based on underline
+   * engine operator syntax. See:
+   * {@link DruidQuery#create(RelOptCluster, RelTraitSet, RelOptTable, DruidTable, List, List, Map)}
+   */
+  public static final List<DruidSqlOperatorConverter> DEFAULT_OPERATORS_LIST =
+      ImmutableList.<DruidSqlOperatorConverter>builder()
+          .add(new DirectOperatorConversion(SqlStdOperatorTable.EXP, "exp"))
+          .add(new DirectOperatorConversion(SqlStdOperatorTable.CONCAT, "concat"))
+          .add(new DirectOperatorConversion(SqlStdOperatorTable.DIVIDE_INTEGER, "div"))
+          .add(new DirectOperatorConversion(SqlStdOperatorTable.LIKE, "like"))
+          .add(new DirectOperatorConversion(SqlStdOperatorTable.LN, "log"))
+          .add(new DirectOperatorConversion(SqlStdOperatorTable.SQRT, "sqrt"))
+          .add(new DirectOperatorConversion(SqlStdOperatorTable.LOWER, "lower"))
+          .add(new DirectOperatorConversion(SqlStdOperatorTable.LOG10, "log10"))
+          .add(new DirectOperatorConversion(SqlStdOperatorTable.REPLACE, "replace"))
+          .add(new DirectOperatorConversion(SqlStdOperatorTable.UPPER, "upper"))
+          .add(new DirectOperatorConversion(SqlStdOperatorTable.POWER, "pow"))
+          .add(new DirectOperatorConversion(SqlStdOperatorTable.ABS, "abs"))
+          .add(new DirectOperatorConversion(SqlStdOperatorTable.CASE, "case_searched"))
+          .add(new DirectOperatorConversion(SqlStdOperatorTable.CHAR_LENGTH, "strlen"))
+          .add(new DirectOperatorConversion(SqlStdOperatorTable.CHARACTER_LENGTH, "strlen"))
+          .add(new BinaryOperatorConversion(SqlStdOperatorTable.EQUALS, "=="))
+          .add(new BinaryOperatorConversion(SqlStdOperatorTable.NOT_EQUALS, "!="))
+          .add(new BinaryOperatorConversion(SqlStdOperatorTable.OR, "||"))
+          .add(new BinaryOperatorConversion(SqlStdOperatorTable.AND, "&&"))
+          .add(new BinaryOperatorConversion(SqlStdOperatorTable.LESS_THAN, "<"))
+          .add(new BinaryOperatorConversion(SqlStdOperatorTable.LESS_THAN_OR_EQUAL, "<="))
+          .add(new BinaryOperatorConversion(SqlStdOperatorTable.GREATER_THAN, ">"))
+          .add(new BinaryOperatorConversion(SqlStdOperatorTable.GREATER_THAN_OR_EQUAL, ">="))
+          .add(new BinaryOperatorConversion(SqlStdOperatorTable.PLUS, "+"))
+          .add(new BinaryOperatorConversion(SqlStdOperatorTable.MINUS, "-"))
+          .add(new BinaryOperatorConversion(SqlStdOperatorTable.MULTIPLY, "*"))
+          .add(new BinaryOperatorConversion(SqlStdOperatorTable.DIVIDE, "/"))
+          .add(new BinaryOperatorConversion(SqlStdOperatorTable.MOD, "%"))
+          .add(new DruidSqlCastConverter())
+          .add(new ExtractOperatorConversion())
+          .add(new UnaryPrefixOperatorConversion(SqlStdOperatorTable.NOT, "!"))
+          .add(new UnaryPrefixOperatorConversion(SqlStdOperatorTable.UNARY_MINUS, "-"))
+          .add(new UnarySuffixOperatorConversion(SqlStdOperatorTable.IS_FALSE, "<= 0"))
+          .add(new UnarySuffixOperatorConversion(SqlStdOperatorTable.IS_NOT_TRUE, "<= 0"))
+          .add(new UnarySuffixOperatorConversion(SqlStdOperatorTable.IS_TRUE, "> 0"))
+          .add(new UnarySuffixOperatorConversion(SqlStdOperatorTable.IS_NOT_FALSE, "> 0"))
+          .add(new UnarySuffixOperatorConversion(SqlStdOperatorTable.IS_NULL, "== null"))
+          .add(new UnarySuffixOperatorConversion(SqlStdOperatorTable.IS_NOT_NULL, "!= null"))
+          .add(new FloorOperatorConversion())
+          .build();
   protected QuerySpec querySpec;
 
   final RelOptTable table;
   final DruidTable druidTable;
   final ImmutableList<Interval> intervals;
   final ImmutableList<RelNode> rels;
+  /**
+   * This operator map provides DruidSqlOperatorConverter instance to convert a Calcite RexNode to
+   * Druid Expression when possible.
+   */
+  final Map<SqlOperator, DruidSqlOperatorConverter> converterOperatorMap;
 
   private static final Pattern VALID_SIG = Pattern.compile("sf?p?(a?|ao)l?");
   private static final String EXTRACT_COLUMN_NAME_PREFIX = "extract";
@@ -119,19 +180,21 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
    * @param druidTable     Druid table
    * @param intervals      Intervals for the query
    * @param rels           Internal relational expressions
+   * @param converterOperatorMap mapping of Calcite Sql Operator to Druid Expression API.
    */
   protected DruidQuery(RelOptCluster cluster, RelTraitSet traitSet,
       RelOptTable table, DruidTable druidTable,
-      List<Interval> intervals, List<RelNode> rels) {
+      List<Interval> intervals, List<RelNode> rels,
+      Map<SqlOperator, DruidSqlOperatorConverter> converterOperatorMap) {
     super(cluster, traitSet);
     this.table = table;
     this.druidTable = druidTable;
     this.intervals = ImmutableList.copyOf(intervals);
     this.rels = ImmutableList.copyOf(rels);
-
+    this.converterOperatorMap = Preconditions.checkNotNull(converterOperatorMap, "Operator map "
+        + "can not be null");
     assert isValid(Litmus.THROW, null);
   }
-
   /** Returns a string describing the operations inside this query.
    *
    * <p>For example, "sfpaol" means {@link TableScan} (s)
@@ -193,7 +256,7 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
         }
         if (r instanceof Filter) {
           final Filter filter = (Filter) r;
-          if (!isValidFilter(filter.getCondition())) {
+          if (!isValidFilter(filter.getCondition(), this)) {
             return litmus.fail("invalid filter [{}]", filter.getCondition());
           }
         }
@@ -208,11 +271,58 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
     return true;
   }
 
-  public boolean isValidFilter(RexNode e) {
-    return isValidFilter(e, false);
+  public Map<SqlOperator, DruidSqlOperatorConverter> getConverterOperatorMap() {
+    return converterOperatorMap;
   }
 
-  public boolean isValidFilter(RexNode e, boolean boundedComparator) {
+  /**
+   * Checks if is possible to Translate RexNode to Druid Simple Filter or Expression Filter
+   *
+   * @param e Filter RexNode
+   * @param druidQuery Druid Query used mostly to provide the operator map converter
+   * see this {@link DruidQuery#getConverterOperatorMap()}
+   *
+   * @return true if the filter can be pushed to Druid
+   */
+  public static boolean isValidFilter(RexNode e, DruidQuery druidQuery) {
+    switch (e.getKind()) {
+    case AND:
+    case OR:
+    case NOT:
+      final RexCall call = (RexCall) e;
+      for (RexNode rexNode : call.getOperands()) {
+        if (!isValidSimpleFilter(rexNode, false)
+            && !isValidExpressionFilter(rexNode, druidQuery)) {
+          return false;
+        }
+      }
+      return true;
+    }
+    return isValidSimpleFilter(e, false) || isValidExpressionFilter(e, druidQuery);
+  }
+
+  /**
+   * Checks tha it is valid expression filter by Translating the rexNode to Druid Expression
+   * @param rexNode rexNode to translate to Druid Filter
+   * @param druidQuery druid Query used to access configuration eg timezone and
+   *                   operator map {@link DruidQuery#getConverterOperatorMap()} etc
+   *
+   * @return true if it is a valid Expression Filter
+   */
+  public static boolean isValidExpressionFilter(RexNode rexNode, DruidQuery druidQuery) {
+    //currently any expression that is not null is valid to push as Expression Filter
+    return DruidExpressions.toDruidExpression(rexNode, druidQuery.table.getRowType(),
+        druidQuery) != null;
+  }
+
+  /**
+   * @param e RexNode
+   * @param boundedComparator whether it is a bound conparator
+   *
+   * @return True if the filter translates a simple leaf Druid filter (not Expression Filter).
+   *
+   */
+  public static boolean isValidSimpleFilter(RexNode e, boolean boundedComparator) {
     switch (e.getKind()) {
     case INPUT_REF:
       return true;
@@ -240,15 +350,15 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
     case FLOOR:
       return TimeExtractionFunction.isValidTimeFloor((RexCall) e);
     case IS_TRUE:
-      return isValidFilter(((RexCall) e).getOperands().get(0), boundedComparator);
+      return isValidSimpleFilter(((RexCall) e).getOperands().get(0), boundedComparator);
     default:
       return false;
     }
   }
 
-  private boolean areValidFilters(List<RexNode> es, boolean boundedComparator) {
+  private static boolean areValidFilters(List<RexNode> es, boolean boundedComparator) {
     for (RexNode e : es) {
-      if (!isValidFilter(e, boundedComparator)) {
+      if (!isValidSimpleFilter(e, boundedComparator)) {
         return false;
       }
     }
@@ -288,14 +398,37 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
   /** Creates a DruidQuery. */
   public static DruidQuery create(RelOptCluster cluster, RelTraitSet traitSet,
       RelOptTable table, DruidTable druidTable, List<RelNode> rels) {
-    return new DruidQuery(cluster, traitSet, table, druidTable, druidTable.intervals, rels);
+    final ImmutableMap converterOperatorMap = ImmutableMap.<SqlOperator,
+        DruidSqlOperatorConverter>builder().putAll(
+        Lists.transform(DEFAULT_OPERATORS_LIST, new Function<DruidSqlOperatorConverter,
+            Map.Entry<SqlOperator, DruidSqlOperatorConverter>>() {
+          @Nullable @Override public Map.Entry<SqlOperator, DruidSqlOperatorConverter> apply(
+              final DruidSqlOperatorConverter input) {
+            return Maps.immutableEntry(input.calciteOperator(), input);
+          }
+        })).build();
+    return create(cluster, traitSet, table, druidTable, druidTable.intervals, rels,
+        converterOperatorMap
+    );
   }
 
   /** Creates a DruidQuery. */
+  public static DruidQuery create(RelOptCluster cluster, RelTraitSet traitSet,
+      RelOptTable table, DruidTable druidTable, List<RelNode> rels,
+      Map<SqlOperator, DruidSqlOperatorConverter> converterOperatorMap) {
+    return create(cluster, traitSet, table, druidTable, druidTable.intervals, rels,
+        converterOperatorMap
+    );
+  }
+
+  /**
+   * Creates a DruidQuery.
+   */
   private static DruidQuery create(RelOptCluster cluster, RelTraitSet traitSet,
       RelOptTable table, DruidTable druidTable, List<Interval> intervals,
-      List<RelNode> rels) {
-    return new DruidQuery(cluster, traitSet, table, druidTable, intervals, rels);
+      List<RelNode> rels, Map<SqlOperator, DruidSqlOperatorConverter> converterOperatorMap) {
+    return new DruidQuery(cluster, traitSet, table, druidTable, intervals, rels,
+        converterOperatorMap);
   }
 
   /** Extends a DruidQuery. */
@@ -303,14 +436,14 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
     final ImmutableList.Builder<RelNode> builder = ImmutableList.builder();
     return DruidQuery.create(query.getCluster(), r.getTraitSet().replace(query.getConvention()),
         query.getTable(), query.druidTable, query.intervals,
-        builder.addAll(query.rels).add(r).build());
+        builder.addAll(query.rels).add(r).build(), query.getConverterOperatorMap());
   }
 
   /** Extends a DruidQuery. */
   public static DruidQuery extendQuery(DruidQuery query,
       List<Interval> intervals) {
     return DruidQuery.create(query.getCluster(), query.getTraitSet(), query.getTable(),
-        query.druidTable, intervals, query.rels);
+        query.druidTable, intervals, query.rels, query.getConverterOperatorMap());
   }
 
   @Override public RelNode copy(RelTraitSet traitSet, List<RelNode> inputs) {
@@ -515,14 +648,18 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
       ImmutableBitSet numericCollationIndexes, Integer fetch, Project postProject) {
     final CalciteConnectionConfig config = getConnectionConfig();
     QueryType queryType = QueryType.SCAN;
-    final Translator translator = new Translator(druidTable, rowType, config.timeZone());
+    final Translator translator = new Translator(druidTable, rowType, config.timeZone(), this);
     List<String> fieldNames = rowType.getFieldNames();
     Set<String> usedFieldNames = Sets.newHashSet(fieldNames);
 
     // Handle filter
-    Json jsonFilter = null;
+    final Json jsonFilter;
     if (filter != null) {
-      jsonFilter = translator.translateFilter(filter);
+      jsonFilter = translator.toDruidFilters(filter);
+      Preconditions.checkNotNull(
+          jsonFilter, DateTimeStringUtils.format("Druid Filter is null instead of [%s]", filter));
+    } else {
+      jsonFilter = null;
     }
 
     // Then we handle project
@@ -924,9 +1061,12 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
 
     // Check for filters
     if (aggCall.hasFilter()) {
-      RexCall filterNode = (RexCall) projects.get(aggCall.filterArg);
-      JsonFilter filter = translator.translateFilter(filterNode.getOperands().get(0));
-      aggregation = new JsonFilteredAggregation(filter, aggregation);
+      RexNode filterNode = projects.get(aggCall.filterArg);
+      JsonFilter druidFilter = translator.toDruidFilters(projects.get(aggCall.filterArg));
+      Preconditions.checkNotNull(
+          druidFilter, DateTimeStringUtils.format("Druid Filter is null instead of [%s]",
+              filterNode));
+      aggregation = new JsonFilteredAggregation(druidFilter, aggregation);
     }
 
     return aggregation;
@@ -1117,11 +1257,13 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
     final DruidTable druidTable;
     final RelDataType rowType;
     final String timeZone;
+    final DruidQuery druidQuery;
     final SimpleDateFormat dateFormatter;
 
-    Translator(DruidTable druidTable, RelDataType rowType, String timeZone) {
+    Translator(DruidTable druidTable, RelDataType rowType, String timeZone, DruidQuery druidQuery) {
       this.druidTable = druidTable;
       this.rowType = rowType;
+      this.druidQuery = druidQuery;
       for (RelDataTypeField f : rowType.getFieldList()) {
         final String fieldName = f.getName();
         if (druidTable.isMetric(fieldName)) {
@@ -1185,7 +1327,7 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
         return ""; // the fieldName for which this is the filter will be added separately
       }
       if (index == -1) {
-        throw new AssertionError("invalid expression " + e);
+        return null;
       }
       final String fieldName = rowType.getFieldList().get(index).getName();
       if (set) {
@@ -1199,7 +1341,8 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
       return fieldName;
     }
 
-    private JsonFilter translateFilter(RexNode e) {
+    @Nullable
+    private JsonFilter toSimpleDruidFilter(RexNode e) {
       final RexCall call;
       if (e.isAlwaysTrue()) {
         return JsonExpressionFilter.alwaysTrue();
@@ -1231,7 +1374,7 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
           posRef = 1;
           posConstant = 0;
         } else {
-          throw new AssertionError("it is not a valid comparison: " + e);
+          return null;
         }
         RexNode posRefNode = call.getOperands().get(posRef);
         final boolean numeric =
@@ -1244,10 +1387,16 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
         if (granularity != null) {
           switch (posRefNode.getKind()) {
           case EXTRACT:
+            if (!TimeExtractionFunction.isValidTimeExtract((RexCall) posRefNode)) {
+              return null;
+            }
             extractionFunction =
                 TimeExtractionFunction.createExtractFromGranularity(granularity, timeZone);
             break;
           case FLOOR:
+            if (!TimeExtractionFunction.isValidTimeFloor((RexCall) posRefNode)) {
+              return null;
+            }
             extractionFunction =
                 TimeExtractionFunction.createFloorFromGranularity(granularity, timeZone);
             formatDateString = true;
@@ -1256,6 +1405,9 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
           }
         }
         String dimName = tr(e, posRef, formatDateString);
+        if (dimName == null) {
+          return null;
+        }
         if (dimName.equals(DruidConnectionImpl.DEFAULT_RESPONSE_TIMESTAMP_COLUMN)) {
           // We need to use Druid default column name to refer to the time dimension in a filter
           dimName = DruidTable.DEFAULT_TIMESTAMP_COLUMN;
@@ -1316,17 +1468,54 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
           return new JsonCompositeFilter(JsonFilter.Type.NOT,
               new JsonSelector(dimName, null, extractionFunction));
         default:
-          throw new AssertionError();
+          return null;
         }
+      default:
+        return null;
+      }
+    }
+
+    @Nullable
+    private JsonFilter toDruidFilters(final RexNode rexNode) {
+      switch (rexNode.getKind()) {
+      case IS_TRUE:
+      case IS_NOT_FALSE:
+        return toDruidFilters(Iterables.getOnlyElement(((RexCall) rexNode).getOperands()));
+      case IS_NOT_TRUE:
+      case IS_FALSE:
+        final JsonFilter simpleFilter = toDruidFilters(Iterables
+            .getOnlyElement(((RexCall) rexNode).getOperands()));
+        return simpleFilter != null ? new JsonCompositeFilter(JsonFilter.Type.NOT, simpleFilter)
+            : simpleFilter;
       case AND:
       case OR:
       case NOT:
-        call = (RexCall) e;
-        return new JsonCompositeFilter(JsonFilter.Type.valueOf(e.getKind().name()),
-            translateFilters(call.getOperands()));
+        final RexCall call = (RexCall) rexNode;
+        final List<JsonFilter> jsonFilters = Lists.newArrayList();
+        for (final RexNode e : call.getOperands()) {
+          final JsonFilter druidFilter = toDruidFilters(e);
+          if (druidFilter == null) {
+            return null;
+          }
+          jsonFilters.add(druidFilter);
+        }
+        return new JsonCompositeFilter(JsonFilter.Type.valueOf(rexNode.getKind().name()),
+            jsonFilters);
       default:
-        throw new AssertionError("cannot translate filter: " + e);
+        final JsonFilter simpleLeafFilter;
+        if (isValidSimpleFilter(rexNode, false)) {
+          simpleLeafFilter = toSimpleDruidFilter(rexNode);
+        } else {
+          simpleLeafFilter = null;
+        }
+        return simpleLeafFilter == null ? toDruidExpressionFilter(rexNode) : simpleLeafFilter;
       }
+    }
+
+    @Nullable
+    private JsonFilter toDruidExpressionFilter(RexNode rexNode) {
+      final String expression = DruidExpressions.toDruidExpression(rexNode, rowType, druidQuery);
+      return expression == null ? null : new JsonExpressionFilter(expression);
     }
 
     private String tr(RexNode call, int index, boolean formatDateString) {
@@ -1335,15 +1524,6 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
 
     private String tr(RexNode call, int index, boolean set, boolean formatDateString) {
       return translate(((RexCall) call).getOperands().get(index), set, formatDateString);
-    }
-
-    private List<JsonFilter> translateFilters(List<RexNode> operands) {
-      final ImmutableList.Builder<JsonFilter> builder =
-          ImmutableList.builder();
-      for (RexNode operand : operands) {
-        builder.add(translateFilter(operand));
-      }
-      return builder.build();
     }
   }
 
@@ -1883,6 +2063,19 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
       writeField(generator, "field", new JsonFieldAccessor("", fieldName));
       generator.writeEndObject();
     }
+  }
+
+  /**
+   * @return index of the timestamp ref or -1 if not present
+   */
+  public int getTimestampFieldIndex() {
+    for (int i = 0; i < this.getRowType().getFieldCount(); i++) {
+      if (this.druidTable.timestampFieldName.equals(
+          this.getRowType().getFieldList().get(i).getName())) {
+        return i;
+      }
+    }
+    return -1;
   }
 }
 

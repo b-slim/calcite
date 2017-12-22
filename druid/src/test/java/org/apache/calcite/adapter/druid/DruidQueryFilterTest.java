@@ -59,7 +59,7 @@ public class DruidQueryFilterTest {
     RexNode inRexNode =
         f.rexBuilder.makeCall(SqlStdOperatorTable.IN, listRexNodes);
     Method translateFilter =
-        DruidQuery.Translator.class.getDeclaredMethod("translateFilter",
+        DruidQuery.Translator.class.getDeclaredMethod("toSimpleDruidFilter",
             RexNode.class);
     translateFilter.setAccessible(true);
     DruidQuery.JsonInFilter returnValue =
@@ -89,7 +89,7 @@ public class DruidQueryFilterTest {
         SqlStdOperatorTable.BETWEEN, listRexNodes);
 
     Method translateFilter =
-        DruidQuery.Translator.class.getDeclaredMethod("translateFilter",
+        DruidQuery.Translator.class.getDeclaredMethod("toSimpleDruidFilter",
             RexNode.class);
     translateFilter.setAccessible(true);
     DruidQuery.JsonBound returnValue =
@@ -121,7 +121,7 @@ public class DruidQueryFilterTest {
         .add("dimensionName", varcharType)
         .build();
     final DruidQuery.Translator translatorStringKind =
-        new DruidQuery.Translator(druidTable, varcharRowType, "UTC");
+        new DruidQuery.Translator(druidTable, varcharRowType, "UTC", null);
   }
 }
 

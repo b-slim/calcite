@@ -47,6 +47,15 @@ public class TimeExtractionFunction implements ExtractionFunction {
       TimeUnitRange.DAY,
       TimeUnitRange.WEEK);
 
+  private static final ImmutableSet<TimeUnitRange> VALID_TIME_FLOOR = Sets.immutableEnumSet(
+      TimeUnitRange.YEAR,
+      TimeUnitRange.MONTH,
+      TimeUnitRange.DAY,
+      TimeUnitRange.WEEK,
+      TimeUnitRange.HOUR,
+      TimeUnitRange.MINUTE,
+      TimeUnitRange.SECOND);
+
   public static final String ISO_TIME_FORMAT = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'";
 
   private final String format;
@@ -126,7 +135,7 @@ public class TimeExtractionFunction implements ExtractionFunction {
    * @return true if the extract unit is valid
    */
   public static boolean isValidTimeExtract(RexCall call) {
-    if (call.getKind() != SqlKind.EXTRACT) {
+    if (call.getKind() != SqlKind.EXTRACT || call.getOperands().size() != 2) {
       return false;
     }
     final RexLiteral flag = (RexLiteral) call.operands.get(0);
@@ -143,12 +152,12 @@ public class TimeExtractionFunction implements ExtractionFunction {
    * @return true if the extract unit is valid
    */
   public static boolean isValidTimeFloor(RexCall call) {
-    if (call.getKind() != SqlKind.FLOOR) {
+    if (call.getKind() != SqlKind.FLOOR || call.getOperands().size() != 2) {
       return false;
     }
     final RexLiteral flag = (RexLiteral) call.operands.get(1);
     final TimeUnitRange timeUnit = (TimeUnitRange) flag.getValue();
-    return timeUnit != null && VALID_TIME_EXTRACT.contains(timeUnit);
+    return timeUnit != null && VALID_TIME_FLOOR.contains(timeUnit);
   }
 
 }
