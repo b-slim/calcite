@@ -4073,7 +4073,36 @@ public class DruidAdapterIT {
         .explainContains(plan)
         .queryContains(druidChecker("timeseries", "ceil(\\\'store_sales\\\')", "timestamp_ceil"))
         .returnsOrdered("EXPR$0=511");
+  }
 
+  @Test
+  public void testSubStringExpressionFilter() {
+    final String sql =
+        "SELECT COUNT(*) AS C, SUBSTRING(\"product_id\" from 1 for 4) FROM " + FOODMART_TABLE
+            + " WHERE SUBSTRING(\"product_id\" from 1 for 4) like '12%' "
+            + " AND CHARACTER_LENGTH(\"product_id\") = 4"
+            + " AND SUBSTRING(\"product_id\" from 3 for 1) = '2'"
+            + " AND CAST(SUBSTRING(\"product_id\" from 2 for 1) AS INTEGER) = 2"
+            + " AND CAST(SUBSTRING(\"product_id\" from 4 for 1) AS INTEGER) = 7"
+            + " AND CAST(SUBSTRING(\"product_id\" from 4) AS INTEGER) = 7"
+            + " Group by SUBSTRING(\"product_id\" from 1 for 4)";
+    final String plan = "PLAN=EnumerableInterpreter\n"
+        + "  BindableProject(C=[$1], EXPR$1=[$0])\n"
+        + "    BindableAggregate(group=[{0}], C=[COUNT()])\n"
+        + "      BindableProject(EXPR$1=[SUBSTRING($0, 1, 4)])\n"
+        + "        DruidQuery(table=[[foodmart, foodmart]], "
+        + "intervals=[[1900-01-09T00:00:00.000Z/2992-01-10T00:00:00.000Z]], "
+        + "filter=[AND(LIKE(SUBSTRING($1, 1, 4), '12%'), =(CHAR_LENGTH($1), 4), "
+        + "=(SUBSTRING($1, 3, 1), '2'), =(CAST(SUBSTRING($1, 2, 1)):INTEGER, 2), "
+        + "=(CAST(SUBSTRING($1, 4, 1)):INTEGER, 7), =(CAST(SUBSTRING($1, 4)):INTEGER, 7))], "
+        + "projects=[[$1]])";
+    sql(sql, FOODMART)
+        .returnsOrdered("C=60; EXPR$1=1227")
+        .explainContains(plan)
+        .queryContains(
+            druidChecker("\"queryType\":\"scan\"", "substring(\\\"product_id\\\"",
+                "\"(strlen(\\\"product_id\\\")"
+        ));
   }
 
 }
