@@ -329,26 +329,7 @@ public class DruidDateTimeUtils {
     if (timeUnit == null) {
       return null;
     }
-    switch (timeUnit) {
-    case YEAR:
-      return Granularity.YEAR;
-    case QUARTER:
-      return Granularity.QUARTER;
-    case MONTH:
-      return Granularity.MONTH;
-    case WEEK:
-      return Granularity.WEEK;
-    case DAY:
-      return Granularity.DAY;
-    case HOUR:
-      return Granularity.HOUR;
-    case MINUTE:
-      return Granularity.MINUTE;
-    case SECOND:
-      return Granularity.SECOND;
-    default:
-      return null;
-    }
+    return toDruidGranularity(timeUnit);
   }
 
   /**
@@ -375,6 +356,39 @@ public class DruidDateTimeUtils {
       return Period.months(3).toString();
     case YEAR:
       return Period.years(1).toString();
+    default:
+      return null;
+    }
+  }
+
+  /**
+   * Translates Calcite TimeUnitRange to Druid {@link Granularity}
+   * @param timeUnit Calcite Time unit to convert
+   *
+   * @return Druid Granularity or null
+   */
+  @Nullable
+  public static Granularity toDruidGranularity(TimeUnitRange timeUnit) {
+    if (timeUnit == null) {
+      return null;
+    }
+    switch (timeUnit) {
+    case YEAR:
+      return Granularity.YEAR;
+    case QUARTER:
+      return Granularity.QUARTER;
+    case MONTH:
+      return Granularity.MONTH;
+    case WEEK:
+      return Granularity.WEEK;
+    case DAY:
+      return Granularity.DAY;
+    case HOUR:
+      return Granularity.HOUR;
+    case MINUTE:
+      return Granularity.MINUTE;
+    case SECOND:
+      return Granularity.SECOND;
     default:
       return null;
     }

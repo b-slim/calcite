@@ -3784,11 +3784,17 @@ public class DruidAdapterIT {
 
   @Test
   public void testExpressionsFilterWithCastTimeToDateToChar2() {
-    final String sql = "SELECT COUNT(*) as C, CAST(CAST(\"timestamp\" as TIMESTAMP) as VARCHAR) FROM \"foodmart\" where CAST(CAST(\"timestamp\" as "
+    final String sql = "SELECT COUNT(*) as C, CAST(CAST(\"timestamp\" as TIMESTAMP) as "
+        + "VARCHAR) FROM \"foodmart\" where CAST(CAST(\"timestamp\" as "
         + "TIMESTAMP) as VARCHAR) = '1997-01-01 00:00:00' group by \"timestamp\"";
     String plan = "PLAN=EnumerableInterpreter\n"
-        + "  BindableProject(C=[$1], EXPR$1=[CAST(CAST($0):TIMESTAMP(0) NOT NULL):VARCHAR CHARACTER SET \"ISO-8859-1\" COLLATE \"ISO-8859-1$en_US$primary\" NOT NULL])\n"
-        + "    DruidQuery(table=[[foodmart, foodmart]], intervals=[[1900-01-09T00:00:00.000Z/2992-01-10T00:00:00.000Z]], filter=[=(CAST(CAST($0):TIMESTAMP(0) NOT NULL):VARCHAR CHARACTER SET \"ISO-8859-1\" COLLATE \"ISO-8859-1$en_US$primary\" NOT NULL, '1997-01-01 00:00:00')], groups=[{0}], aggs=[[COUNT()]])";
+        + "  BindableProject(C=[$1], EXPR$1=[CAST(CAST($0):TIMESTAMP(0) NOT NULL):VARCHAR CHARACTER"
+        + " SET \"ISO-8859-1\" COLLATE \"ISO-8859-1$en_US$primary\" NOT NULL])\n"
+        + "    DruidQuery(table=[[foodmart, foodmart]], "
+        + "intervals=[[1900-01-09T00:00:00.000Z/2992-01-10T00:00:00.000Z]], "
+        + "filter=[=(CAST(CAST($0):TIMESTAMP(0) NOT NULL):"
+        + "VARCHAR CHARACTER SET \"ISO-8859-1\" COLLATE \"ISO-8859-1$en_US$primary\" NOT NULL,"
+        + " '1997-01-01 00:00:00')], groups=[{0}], aggs=[[COUNT()]])";
     String druidQuery = "\"filter\":{\"type\":\"expression\",\"expression\":\"(timestamp_format(";
     sql(sql, FOODMART)
         .explainContains(plan)
@@ -4045,6 +4051,29 @@ public class DruidAdapterIT {
             ))
         .returnsOrdered("EXPR$0=36")
         .explainContains(plan);
+  }
+
+
+  @Test
+  public void testCeilFilterExpression() {
+    final String sql = "SELECT COUNT(*) FROM " + FOODMART_TABLE + " WHERE ceil(\"store_sales\") > 1"
+        + " AND ceil(\"timestamp\" TO DAY) < CAST('1997-01-05' AS TIMESTAMP)"
+        + " AND ceil(\"timestamp\" TO MONTH) < CAST('1997-03-01' AS TIMESTAMP)"
+        + " AND ceil(\"timestamp\" TO HOUR) > CAST('1997-01-01' AS TIMESTAMP) "
+        + " AND ceil(\"timestamp\" TO MINUTE) > CAST('1997-01-01' AS TIMESTAMP) "
+        + " AND ceil(\"timestamp\" TO SECOND) > CAST('1997-01-01' AS TIMESTAMP) ";
+    final String plan = "PLAN=EnumerableInterpreter\n"
+        + "  DruidQuery(table=[[foodmart, foodmart]], "
+        + "intervals=[[1900-01-09T00:00:00.000Z/2992-01-10T00:00:00.000Z]], "
+        + "filter=[AND(>(CEIL($90), 1), <(CEIL($0, FLAG(DAY)), 1997-01-05 00:00:00), "
+        + "<(CEIL($0, FLAG(MONTH)), 1997-03-01 00:00:00), >(CEIL($0, FLAG(HOUR)), "
+        + "1997-01-01 00:00:00), >(CEIL($0, FLAG(MINUTE)), 1997-01-01 00:00:00),"
+        + " >(CEIL($0, FLAG(SECOND)), 1997-01-01 00:00:00))], groups=[{}], aggs=[[COUNT()]])";
+    sql(sql, FOODMART)
+        .explainContains(plan)
+        .queryContains(druidChecker("timeseries", "ceil(\\\'store_sales\\\')", "timestamp_ceil"))
+        .returnsOrdered("EXPR$0=511");
+
   }
 
 }

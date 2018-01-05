@@ -270,6 +270,25 @@ public class DruidExpressions {
     );
   }
 
+  public static String applyTimestampCeil(
+      final String input,
+      final String granularity,
+      final String origin,
+      final TimeZone timeZone
+  ) {
+    Preconditions.checkNotNull(input, "input");
+    Preconditions.checkNotNull(granularity, "granularity");
+
+
+    return DruidExpressions.fromFunctionCall(
+        "timestamp_ceil",
+        ImmutableList.of(input,
+            DruidExpressions.stringLiteral(granularity),
+            DruidExpressions.stringLiteral(origin),
+            DruidExpressions.stringLiteral(timeZone.getID()))
+    );
+  }
+
 
   public static String applyTimeExtract(String timeExpression, String druidUnit,
       TimeZone timeZone) {
