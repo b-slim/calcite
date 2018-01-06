@@ -128,7 +128,7 @@ public class DruidExpressions {
     } else if (kind == SqlKind.LITERAL) {
       // Translate literal.
       if (RexLiteral.isNullLiteral(rexNode)) {
-        // in this case the filter must yeild to unknown let Calcite deal with this.
+        //case the filter/project might yield to unknown let Calcite deal with this for now
         return null;
       } else if (SqlTypeName.NUMERIC_TYPES.contains(sqlTypeName)) {
         return DruidExpressions.fromExpression(DruidExpressions.numberLiteral((Number) RexLiteral

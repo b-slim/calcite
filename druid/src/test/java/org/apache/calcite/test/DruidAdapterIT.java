@@ -450,11 +450,11 @@ public class DruidAdapterIT {
         + "intervals=[[1900-01-09T00:00:00.000Z/2992-01-10T00:00:00.000Z]], filter=[=($1, 1020)],"
         + " projects=[[$90, $1]], groups=[{0, 1}], aggs=[[]])";
     final String druidQuery = "{'queryType':'groupBy','dataSource':'foodmart','granularity':'all',"
-            + "'dimensions':[{'type':'default','dimension':'store_sales'},"
-            + "{'type':'default','dimension':'product_id'}],'limitSpec':{'type':'default'},'"
-            + "filter':{'type':'selector','dimension':'product_id','value':'1020'},"
-            + "'aggregations':[],"
-            + "'intervals':['1900-01-09T00:00:00.000Z/2992-01-10T00:00:00.000Z']}";
+        + "'dimensions':[{'type':'default','dimension':'store_sales'},"
+        + "{'type':'default','dimension':'product_id'}],'limitSpec':{'type':'default'},"
+        + "'filter':{'type':'bound','dimension':'product_id','lower':'1020','lowerStrict':false,"
+        + "'upper':'1020','upperStrict':false,'ordering':'numeric'},'aggregations':[],"
+        + "'intervals':['1900-01-09T00:00:00.000Z/2992-01-10T00:00:00.000Z']}";
     sql(sql)
         .explainContains(plan)
         .queryContains(druidChecker(druidQuery))
@@ -469,12 +469,12 @@ public class DruidAdapterIT {
     final String sql = "select \"product_id\" from \"foodmart\" where "
             + "\"product_id\" = 1020 group by \"product_id\"";
     final String druidQuery = "{'queryType':'groupBy','dataSource':'foodmart',"
-            + "'granularity':'all','dimensions':[{'type':'default',"
-            + "'dimension':'product_id'}],"
-            + "'limitSpec':{'type':'default'},'filter':{'type':'selector',"
-            + "'dimension':'product_id','value':'1020'},"
-            + "'aggregations':[],"
-            + "'intervals':['1900-01-09T00:00:00.000Z/2992-01-10T00:00:00.000Z']}";
+        + "'granularity':'all','dimensions':[{'type':'default',"
+        + "'dimension':'product_id'}],"
+        + "'limitSpec':{'type':'default'},'filter':{'type':'bound','dimension':'product_id',"
+        + "'lower':'1020','lowerStrict':false,'upper':'1020','upperStrict':false,"
+        + "'ordering':'numeric'},'aggregations':[],"
+        + "'intervals':['1900-01-09T00:00:00.000Z/2992-01-10T00:00:00.000Z']}";
     sql(sql).queryContains(druidChecker(druidQuery)).returnsUnordered("product_id=1020");
   }
 
@@ -483,12 +483,12 @@ public class DruidAdapterIT {
             + "\"product_id\" = 1020";
     final String sql = "select \"id\" from (" + innerQuery + ") group by \"id\"";
     final String druidQuery = "{'queryType':'groupBy','dataSource':'foodmart',"
-            + "'granularity':'all',"
-            + "'dimensions':[{'type':'default','dimension':'product_id'}],"
-            + "'limitSpec':{'type':'default'},"
-            + "'filter':{'type':'selector','dimension':'product_id','value':'1020'},"
-            + "'aggregations':[],"
-            + "'intervals':['1900-01-09T00:00:00.000Z/2992-01-10T00:00:00.000Z']}";
+        + "'granularity':'all',"
+        + "'dimensions':[{'type':'default','dimension':'product_id'}],"
+        + "'limitSpec':{'type':'default'},"
+        + "'filter':{'type':'bound','dimension':'product_id','lower':'1020','lowerStrict':false,"
+        + "'upper':'1020','upperStrict':false,'ordering':'numeric'},'aggregations':[],"
+        + "'intervals':['1900-01-09T00:00:00.000Z/2992-01-10T00:00:00.000Z']}";
     sql(sql)
         .returnsUnordered("id=1020")
         .queryContains(druidChecker(druidQuery));
@@ -851,7 +851,8 @@ public class DruidAdapterIT {
         + "where \"product_id\" = -1";
     final String druidQuery = "{'queryType':'scan','dataSource':'foodmart',"
         + "'intervals':['1900-01-09T00:00:00.000Z/2992-01-10T00:00:00.000Z'],"
-        + "'filter':{'type':'selector','dimension':'product_id','value':'-1'},"
+        + "'filter':{'type':'bound','dimension':'product_id','lower':'-1','lowerStrict':false,"
+        + "'upper':'-1','upperStrict':false,'ordering':'numeric'},"
         + "'columns':['product_name'],'granularity':'all',"
         + "'resultFormat':'compactedList'}";
     sql(sql)
@@ -2011,7 +2012,7 @@ public class DruidAdapterIT {
 
   @Test public void testGroupByWeekExtract() {
     final String sql = "SELECT extract(week from \"timestamp\") from \"foodmart\" where "
-        + "\"product_id\" = 1558 and extract(week from \"timestamp\") IN (10, 11)group by extract"
+        + "\"product_id\" = 1558 and extract(week from \"timestamp\") IN (10, 11) group by extract"
         + "(week from \"timestamp\")";
 
     final String druidQuery = "{'queryType':'groupBy','dataSource':'foodmart',"
@@ -2019,8 +2020,9 @@ public class DruidAdapterIT {
         + "'dimension':'__time','outputName':'extract_week',"
         + "'extractionFn':{'type':'timeFormat','format':'w','timeZone':'UTC',"
         + "'locale':'en-US'}}],'limitSpec':{'type':'default'},"
-        + "'filter':{'type':'and','fields':[{'type':'selector',"
-        + "'dimension':'product_id','value':'1558'},{'type':'or',"
+        + "'filter':{'type':'and','fields':[{'type':'bound','dimension':'product_id',"
+        + "'lower':'1558','lowerStrict':false,'upper':'1558','upperStrict':false,"
+        + "'ordering':'numeric'},{'type':'or',"
         + "'fields':[{'type':'selector','dimension':'__time','value':'10',"
         + "'extractionFn':{'type':'timeFormat','format':'w','timeZone':'UTC',"
         + "'locale':'en-US'}},{'type':'selector','dimension':'__time',"
@@ -4105,6 +4107,38 @@ public class DruidAdapterIT {
         ));
   }
 
+  /**
+   * Test case for https://issues.apache.org/jira/browse/CALCITE-2098.
+   * Need to make sure that when there we have a valid filter with no conjunction we still push
+   * all the valid filters.
+   */
+  @Test
+  public void testFilterClauseWithNoConjunction() {
+    String sql = "select sum(\"store_sales\")"
+        + "from \"foodmart\" where \"product_id\" > 1555 or \"store_cost\" > 5 or extract(year "
+        + "from \"timestamp\") = 1997 "
+        + "group by floor(\"timestamp\" to DAY),\"product_id\"";
+    sql(sql)
+        .queryContains(
+            druidChecker("\"queryType\":\"groupBy\"", "{\"type\":\"bound\","
+                + "\"dimension\":\"store_cost\",\"lower\":\"5\",\"lowerStrict\":true,"
+                + "\"ordering\":\"numeric\"}"))
+        .runs();
+  }
+
+  /**
+   * Test case for https://issues.apache.org/jira/browse/CALCITE-2123
+   */
+  @Test
+  public void testBetweenFilterWithCastOverNumeric() {
+    final String sql = "SELECT COUNT(*) FROM " + FOODMART_TABLE + " WHERE \"product_id\" = 16.0";
+    sql(sql, FOODMART).runs().queryContains(
+        druidChecker(
+            "\"filter\":{\"type\":\"bound\",\"dimension\":\"product_id\",\"lower\":\"16.0\","
+                + "\"lowerStrict\":false,\"upper\":\"16.0\","
+                + "\"upperStrict\":false,\"ordering\":\"numeric\"}"));
+
+  }
 }
 
 // End DruidAdapterIT.java

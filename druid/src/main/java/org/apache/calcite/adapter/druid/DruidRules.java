@@ -254,7 +254,7 @@ public class DruidRules {
             RexUtil.composeConjunction(rexBuilder, triple.getLeft(), false),
             query.getConnectionConfig().timeZone());
         if (intervals == null || intervals.isEmpty()) {
-          // Case we have an filter with extract that can not be written as interval push down
+          // Case we have a filter with extract that can not be written as interval push down
           triple.getMiddle().addAll(triple.getLeft());
         }
       }
@@ -294,13 +294,9 @@ public class DruidRules {
       for (RexNode conj : validPreds) {
         final RelOptUtil.InputReferencedVisitor visitor = new RelOptUtil.InputReferencedVisitor();
         conj.accept(visitor);
-        if (visitor.inputPosReferenced.contains(timestampFieldIdx)) {
-          if (visitor.inputPosReferenced.size() != 1) {
-            // Complex predicate, transformation currently not supported
-            nonPushableNodes.add(conj);
-          } else {
-            timeRangeNodes.add(conj);
-          }
+        if (visitor.inputPosReferenced.contains(timestampFieldIdx)
+            && visitor.inputPosReferenced.size() == 1) {
+          timeRangeNodes.add(conj);
         } else {
           pushableNodes.add(conj);
         }

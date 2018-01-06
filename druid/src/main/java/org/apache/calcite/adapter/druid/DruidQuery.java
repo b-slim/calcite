@@ -109,8 +109,7 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
   /**
    * Provides a standard list of supported Calcite operators that can be converted to
    * Druid Expressions. This can be used as is or re-adapted based on underline
-   * engine operator syntax. See:
-   * {@link DruidQuery#create(RelOptCluster, RelTraitSet, RelOptTable, DruidTable, List, List, Map)}
+   * engine operator syntax.
    */
   public static final List<DruidSqlOperatorConverter> DEFAULT_OPERATORS_LIST =
       ImmutableList.<DruidSqlOperatorConverter>builder()
@@ -312,14 +311,14 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
    * @return true if it is a valid Expression Filter
    */
   public static boolean isValidExpressionFilter(RexNode rexNode, DruidQuery druidQuery) {
-    //currently any expression that is not null is valid to push as Expression Filter
+    //currently any expression != null is valid to push as Expression Filter
     return DruidExpressions.toDruidExpression(rexNode, druidQuery.table.getRowType(),
         druidQuery) != null;
   }
 
   /**
    * @param e RexNode
-   * @param boundedComparator whether it is a bound conparator
+   * @param boundedComparator whether it is a bound comparator eg =,!=,<=,>=,>,<,between
    *
    * @return True if the filter translates a simple leaf Druid filter (not Expression Filter).
    *
@@ -329,14 +328,14 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
     case INPUT_REF:
       return true;
     case LITERAL:
-      return ((RexLiteral) e).getValue() != null;
+      return !RexLiteral.isNullLiteral(e);
     case AND:
     case OR:
     case NOT:
     case IN:
     case IS_NULL:
     case IS_NOT_NULL:
-      return areValidFilters(((RexCall) e).getOperands(), false);
+      return areValidSimpleFilters(((RexCall) e).getOperands(), false);
     case EQUALS:
     case NOT_EQUALS:
     case LESS_THAN:
@@ -344,9 +343,9 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
     case GREATER_THAN:
     case GREATER_THAN_OR_EQUAL:
     case BETWEEN:
-      return areValidFilters(((RexCall) e).getOperands(), true);
+      return areValidSimpleFilters(((RexCall) e).getOperands(), true);
     case CAST:
-      return isValidCast((RexCall) e, boundedComparator);
+      return isValidLeafCast((RexCall) e, boundedComparator);
     case EXTRACT:
       return TimeExtractionFunction.isValidTimeExtract((RexCall) e);
     case FLOOR:
@@ -358,7 +357,7 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
     }
   }
 
-  private static boolean areValidFilters(List<RexNode> es, boolean boundedComparator) {
+  private static boolean areValidSimpleFilters(List<RexNode> es, boolean boundedComparator) {
     for (RexNode e : es) {
       if (!isValidSimpleFilter(e, boundedComparator)) {
         return false;
@@ -367,24 +366,35 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
     return true;
   }
 
-  private static boolean isValidCast(RexCall e, boolean boundedComparator) {
+  /**
+   * @param e rexCall CAST call to check if it is a valid leaf CAST
+   * @param boundedComparator indicates if we have a bounded comparator
+   *
+   * @return true if the cast is a leaf node and it has valid to/from types, false otherwise
+   */
+  private static boolean isValidLeafCast(RexCall e, boolean boundedComparator) {
     assert e.isA(SqlKind.CAST);
-    if (e.getOperands().get(0).isA(INPUT_REF)
-        && e.getType().getFamily() == SqlTypeFamily.CHARACTER) {
+    final RexNode input = e.getOperands().get(0);
+    if (!input.isA(INPUT_REF)) {
+      // it is not a leaf cast don't bother going further.
+      return false;
+    }
+    final SqlTypeName toTypeName = e.getType().getSqlTypeName();
+    if (e.getType().getFamily() == SqlTypeFamily.CHARACTER) {
       // CAST of input to character type
       return true;
     }
-    if (e.getOperands().get(0).isA(INPUT_REF)
-        && e.getType().getFamily() == SqlTypeFamily.NUMERIC
-        && boundedComparator) {
+    if (toTypeName.getFamily() == SqlTypeFamily.NUMERIC && boundedComparator) {
       // CAST of input to numeric type, it is part of a bounded comparison
       return true;
     }
-    if (e.getOperands().get(0).isA(SqlKind.LITERAL)
-        && (e.getType().getSqlTypeName() == SqlTypeName.DATE
-        || e.getType().getSqlTypeName() == SqlTypeName.TIMESTAMP
-        || e.getType().getSqlTypeName() == SqlTypeName.TIMESTAMP_WITH_LOCAL_TIME_ZONE)) {
+    if (toTypeName == SqlTypeName.DATE || toTypeName == SqlTypeName.TIMESTAMP
+        || toTypeName == SqlTypeName.TIMESTAMP_WITH_LOCAL_TIME_ZONE) {
       // CAST of literal to timestamp type
+      return true;
+    }
+    if (toTypeName.getFamily().contains(input.getType())) {
+      //same type it is okay to push it
       return true;
     }
     // Currently other CAST operations cannot be pushed to Druid
@@ -1378,10 +1388,17 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
         } else {
           return null;
         }
-        RexNode posRefNode = call.getOperands().get(posRef);
-        final boolean numeric =
-            call.getOperands().get(posRef).getType().getFamily()
-                == SqlTypeFamily.NUMERIC;
+        final boolean constantIsNumeric;
+        final RexNode posRefNode = call.getOperands().get(posRef);
+        if (posConstant != -1) {
+          final RexNode constantNode =  call.getOperands().get(posConstant);
+          constantIsNumeric = constantNode.getType().getFamily() == SqlTypeFamily.NUMERIC;
+        } else {
+          constantIsNumeric = false;
+        }
+
+        final boolean numeric = posRefNode.getType().getFamily() == SqlTypeFamily.NUMERIC
+            || constantIsNumeric;
         boolean formatDateString = false;
         final Granularity granularity = DruidDateTimeUtils.extractGranularity(posRefNode);
         // in case no extraction the field will be omitted from the serialization
