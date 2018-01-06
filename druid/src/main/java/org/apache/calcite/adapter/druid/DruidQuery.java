@@ -125,6 +125,9 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
           .add(new DirectOperatorConversion(SqlStdOperatorTable.UPPER, "upper"))
           .add(new DirectOperatorConversion(SqlStdOperatorTable.POWER, "pow"))
           .add(new DirectOperatorConversion(SqlStdOperatorTable.ABS, "abs"))
+          .add(new DirectOperatorConversion(SqlStdOperatorTable.SIN, "sin"))
+          .add(new DirectOperatorConversion(SqlStdOperatorTable.COS, "cos"))
+          .add(new DirectOperatorConversion(SqlStdOperatorTable.TAN, "tan"))
           .add(new DirectOperatorConversion(SqlStdOperatorTable.CASE, "case_searched"))
           .add(new DirectOperatorConversion(SqlStdOperatorTable.CHAR_LENGTH, "strlen"))
           .add(new DirectOperatorConversion(SqlStdOperatorTable.CHARACTER_LENGTH, "strlen"))
@@ -380,7 +383,7 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
       return false;
     }
     final SqlTypeName toTypeName = e.getType().getSqlTypeName();
-    if (e.getType().getFamily() == SqlTypeFamily.CHARACTER) {
+    if (toTypeName.getFamily() == SqlTypeFamily.CHARACTER) {
       // CAST of input to character type
       return true;
     }
@@ -388,8 +391,8 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
       // CAST of input to numeric type, it is part of a bounded comparison
       return true;
     }
-    if (toTypeName == SqlTypeName.DATE || toTypeName == SqlTypeName.TIMESTAMP
-        || toTypeName == SqlTypeName.TIMESTAMP_WITH_LOCAL_TIME_ZONE) {
+    if (toTypeName.getFamily() == SqlTypeFamily.TIMESTAMP
+        || toTypeName.getFamily() == SqlTypeFamily.DATETIME) {
       // CAST of literal to timestamp type
       return true;
     }
