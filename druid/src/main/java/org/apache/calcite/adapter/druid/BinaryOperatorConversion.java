@@ -59,13 +59,8 @@ public class BinaryOperatorConversion implements DruidSqlOperatorConverter {
       ));
     }
 
-    return DruidExpressions.fromExpression(
-        DateTimeStringUtils.format(
-            "(%s %s %s)",
-            druidExpressions.get(0),
-            druidOperator,
-            druidExpressions.get(1)
-        )
+    return DateTimeStringUtils
+        .format("(%s %s %s)", druidExpressions.get(0), druidOperator, druidExpressions.get(1)
     );
   }
 }

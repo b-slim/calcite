@@ -19,7 +19,11 @@ package org.apache.calcite.adapter.druid;
 import org.apache.calcite.avatica.util.TimeUnitRange;
 import org.apache.calcite.rex.RexCall;
 import org.apache.calcite.rex.RexLiteral;
+import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.sql.SqlKind;
+
+import org.apache.calcite.sql.type.SqlTypeFamily;
+import org.apache.calcite.sql.type.SqlTypeName;
 
 import com.fasterxml.jackson.core.JsonGenerator;
 import com.google.common.collect.ImmutableSet;
@@ -27,6 +31,9 @@ import com.google.common.collect.Sets;
 
 import java.io.IOException;
 import java.util.Locale;
+import java.util.TimeZone;
+
+import javax.annotation.Nullable;
 
 import static org.apache.calcite.adapter.druid.DruidQuery.writeFieldIf;
 
@@ -158,6 +165,40 @@ public class TimeExtractionFunction implements ExtractionFunction {
     final RexLiteral flag = (RexLiteral) call.operands.get(1);
     final TimeUnitRange timeUnit = (TimeUnitRange) flag.getValue();
     return timeUnit != null && VALID_TIME_FLOOR.contains(timeUnit);
+  }
+
+  /**
+   * @param rexNode cast RexNode
+   * @param timeZone timezone
+   *
+   * @return Druid Time extraction function or null when can not translate the cast.
+   */
+  @Nullable
+  public static TimeExtractionFunction translateCastToTimeExtract(RexNode rexNode,
+      TimeZone timeZone
+  ) {
+    assert rexNode.getKind() == SqlKind.CAST;
+    final RexCall rexCall = (RexCall) rexNode;
+    final String castFormat = DruidSqlCastConverter
+        .dateTimeFormatString(rexCall.getType().getSqlTypeName());
+    final String timeZoneId = timeZone == null ? null : timeZone.getID();
+    if (castFormat == null) {
+      // unknown format
+      return null;
+    }
+    if (rexCall.getType().getFamily() == SqlTypeFamily.DATE) {
+      return new TimeExtractionFunction(castFormat,
+          DruidDateTimeUtils.toISOPeriodFormat(Granularity.DAY), timeZoneId,
+          Locale.ENGLISH.toString()
+      );
+    }
+    if (rexCall.getType().getSqlTypeName() == SqlTypeName.TIMESTAMP
+        || rexCall.getType().getSqlTypeName() == SqlTypeName.TIMESTAMP_WITH_LOCAL_TIME_ZONE) {
+      return new TimeExtractionFunction(castFormat, null, timeZoneId, Locale.ENGLISH.toString()
+      );
+    }
+
+    return null;
   }
 
 }

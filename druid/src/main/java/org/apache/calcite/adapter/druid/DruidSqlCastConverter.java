@@ -52,7 +52,8 @@ public class DruidSqlCastConverter implements DruidSqlOperatorConverter {
 
     final SqlTypeName fromType = operand.getType().getSqlTypeName();
     final SqlTypeName toType = rexNode.getType().getSqlTypeName();
-    final TimeZone timeZone = TimeZone.getTimeZone(druidQuery.getConnectionConfig().timeZone());
+    final String timeZoneConf = druidQuery.getConnectionConfig().timeZone();
+    final TimeZone timeZone = TimeZone.getTimeZone(timeZoneConf == null ? "UTC" : timeZoneConf);
 
     if (SqlTypeName.CHAR_TYPES.contains(fromType) && SqlTypeName.DATETIME_TYPES.contains(toType)) {
       //case chars to dates
@@ -138,14 +139,13 @@ public class DruidSqlCastConverter implements DruidSqlOperatorConverter {
         "timestamp_format",
         ImmutableList.of(
             operand,
-            DruidExpressions.fromExpression(
-                DruidExpressions.stringLiteral(dateTimeFormatString(fromType))),
-            DruidExpressions.fromExpression(
-                DruidExpressions.stringLiteral(timeZone.getID())))
+            DruidExpressions.stringLiteral(dateTimeFormatString(fromType)),
+            DruidExpressions.stringLiteral(timeZone.getID())
+        )
     );
   }
 
-  private static String dateTimeFormatString(final SqlTypeName sqlTypeName) {
+  public static String dateTimeFormatString(final SqlTypeName sqlTypeName) {
     if (sqlTypeName == SqlTypeName.DATE) {
       return "yyyy-MM-dd";
     } else if (sqlTypeName == SqlTypeName.TIMESTAMP) {
@@ -153,8 +153,7 @@ public class DruidSqlCastConverter implements DruidSqlOperatorConverter {
     } else if (sqlTypeName == sqlTypeName.TIMESTAMP_WITH_LOCAL_TIME_ZONE) {
       return TimeExtractionFunction.ISO_TIME_FORMAT;
     } else {
-      throw new IllegalStateException(
-          DateTimeStringUtils.format("Unsupported DateTime type[%s]", sqlTypeName));
+      return null;
     }
   }
 }
