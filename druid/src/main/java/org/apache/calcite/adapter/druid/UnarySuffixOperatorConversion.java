@@ -55,10 +55,9 @@ public class UnarySuffixOperatorConversion implements DruidSqlOperatorConverter 
       return null;
     }
 
-    return DruidExpressions.fromExpression(
-        DateTimeStringUtils.format(
+    return DateTimeStringUtils.format(
             "(%s %s)",
-            Iterables.getOnlyElement(druidExpressions), druidOperator));
+            Iterables.getOnlyElement(druidExpressions), druidOperator);
   }
 }
 

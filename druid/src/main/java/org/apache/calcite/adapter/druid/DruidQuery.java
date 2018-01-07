@@ -53,7 +53,6 @@ import org.apache.calcite.rex.RexCall;
 import org.apache.calcite.rex.RexInputRef;
 import org.apache.calcite.rex.RexLiteral;
 import org.apache.calcite.rex.RexNode;
-import org.apache.calcite.rex.RexUtil;
 import org.apache.calcite.runtime.Hook;
 import org.apache.calcite.schema.ScannableTable;
 import org.apache.calcite.sql.SqlKind;
@@ -260,7 +259,9 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
         }
         if (r instanceof Filter) {
           final Filter filter = (Filter) r;
-          if (!isValidFilter(filter.getCondition(), this)) {
+          final DruidJsonFilter druidJsonFilter = DruidJsonFilter
+              .toDruidFilters(filter.getCondition(), table.getRowType(), this);
+          if (druidJsonFilter == null) {
             return litmus.fail("invalid filter [{}]", filter.getCondition());
           }
         }
@@ -277,131 +278,6 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
 
   public Map<SqlOperator, DruidSqlOperatorConverter> getConverterOperatorMap() {
     return converterOperatorMap;
-  }
-
-  /**
-   * Checks if is possible to Translate RexNode to Druid Simple Filter or Expression Filter
-   *
-   * @param e Filter RexNode
-   * @param druidQuery Druid Query used mostly to provide the operator map converter
-   * see this {@link DruidQuery#getConverterOperatorMap()}
-   *
-   * @return true if the filter can be pushed to Druid
-   */
-  public static boolean isValidFilter(RexNode e, DruidQuery druidQuery) {
-    switch (e.getKind()) {
-    case AND:
-    case OR:
-    case NOT:
-      final RexCall call = (RexCall) e;
-      for (RexNode rexNode : call.getOperands()) {
-        if (!isValidSimpleFilter(rexNode, false)
-            && !isValidExpressionFilter(rexNode, druidQuery)) {
-          return false;
-        }
-      }
-      return true;
-    }
-    return isValidSimpleFilter(e, false) || isValidExpressionFilter(e, druidQuery);
-  }
-
-  /**
-   * Checks tha it is valid expression filter by Translating the rexNode to Druid Expression
-   * @param rexNode rexNode to translate to Druid Filter
-   * @param druidQuery druid Query used to access configuration eg timezone and
-   *                   operator map {@link DruidQuery#getConverterOperatorMap()} etc
-   *
-   * @return true if it is a valid Expression Filter
-   */
-  public static boolean isValidExpressionFilter(RexNode rexNode, DruidQuery druidQuery) {
-    //currently any expression != null is valid to push as Expression Filter
-    return DruidExpressions.toDruidExpression(rexNode, druidQuery.table.getRowType(),
-        druidQuery) != null;
-  }
-
-  /**
-   * @param e RexNode
-   * @param boundedComparator whether it is a bound comparator eg =,!=,<=,>=,>,<,between
-   *
-   * @return True if the filter translates a simple leaf Druid filter (not Expression Filter).
-   *
-   */
-  public static boolean isValidSimpleFilter(RexNode e, boolean boundedComparator) {
-    switch (e.getKind()) {
-    case INPUT_REF:
-      return true;
-    case LITERAL:
-      return !RexLiteral.isNullLiteral(e);
-    case AND:
-    case OR:
-    case NOT:
-    case IN:
-    case IS_NULL:
-    case IS_NOT_NULL:
-      return areValidSimpleFilters(((RexCall) e).getOperands(), false);
-    case EQUALS:
-    case NOT_EQUALS:
-    case LESS_THAN:
-    case LESS_THAN_OR_EQUAL:
-    case GREATER_THAN:
-    case GREATER_THAN_OR_EQUAL:
-    case BETWEEN:
-      return areValidSimpleFilters(((RexCall) e).getOperands(), true);
-    case CAST:
-      return isValidLeafCast((RexCall) e, boundedComparator);
-    case EXTRACT:
-      return TimeExtractionFunction.isValidTimeExtract((RexCall) e);
-    case FLOOR:
-      return TimeExtractionFunction.isValidTimeFloor((RexCall) e);
-    case IS_TRUE:
-      return isValidSimpleFilter(((RexCall) e).getOperands().get(0), boundedComparator);
-    default:
-      return false;
-    }
-  }
-
-  private static boolean areValidSimpleFilters(List<RexNode> es, boolean boundedComparator) {
-    for (RexNode e : es) {
-      if (!isValidSimpleFilter(e, boundedComparator)) {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  /**
-   * @param e rexCall CAST call to check if it is a valid leaf CAST
-   * @param boundedComparator indicates if we have a bounded comparator
-   *
-   * @return true if the cast is a leaf node and it has valid to/from types, false otherwise
-   */
-  private static boolean isValidLeafCast(RexCall e, boolean boundedComparator) {
-    assert e.isA(SqlKind.CAST);
-    final RexNode input = e.getOperands().get(0);
-    if (!input.isA(INPUT_REF)) {
-      // it is not a leaf cast don't bother going further.
-      return false;
-    }
-    final SqlTypeName toTypeName = e.getType().getSqlTypeName();
-    if (toTypeName.getFamily() == SqlTypeFamily.CHARACTER) {
-      // CAST of input to character type
-      return true;
-    }
-    if (toTypeName.getFamily() == SqlTypeFamily.NUMERIC && boundedComparator) {
-      // CAST of input to numeric type, it is part of a bounded comparison
-      return true;
-    }
-    if (toTypeName.getFamily() == SqlTypeFamily.TIMESTAMP
-        || toTypeName.getFamily() == SqlTypeFamily.DATETIME) {
-      // CAST of literal to timestamp type
-      return true;
-    }
-    if (toTypeName.getFamily().contains(input.getType())) {
-      //same type it is okay to push it
-      return true;
-    }
-    // Currently other CAST operations cannot be pushed to Druid
-    return false;
   }
 
   /** Returns whether a signature represents an sequence of relational operators
@@ -668,9 +544,9 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
     Set<String> usedFieldNames = Sets.newHashSet(fieldNames);
 
     // Handle filter
-    final Json jsonFilter;
+    final DruidJson jsonFilter;
     if (filter != null) {
-      jsonFilter = translator.toDruidFilters(filter);
+      jsonFilter = DruidJsonFilter.toDruidFilters(filter, table.getRowType(), this);
       Preconditions.checkNotNull(
           jsonFilter, DateTimeStringUtils.format("Druid Filter is null instead of [%s]", filter));
     } else {
@@ -801,7 +677,7 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
 
       for (Pair<AggregateCall, String> agg : Pair.zip(aggCalls, aggNames)) {
         final JsonAggregation jsonAggregation =
-            getJsonAggregation(fieldNames, agg.right, agg.left, projects, translator);
+            getJsonAggregation(fieldNames, agg.right, agg.left, projects);
         aggregations.add(jsonAggregation);
         builder.add(jsonAggregation.name);
       }
@@ -998,7 +874,7 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
   }
 
   protected JsonAggregation getJsonAggregation(List<String> fieldNames,
-      String name, AggregateCall aggCall, List<RexNode> projects, Translator translator) {
+      String name, AggregateCall aggCall, List<RexNode> projects) {
     final List<String> list = new ArrayList<>();
     for (Integer arg : aggCall.getArgList()) {
       list.add(fieldNames.get(arg));
@@ -1051,8 +927,8 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
       }
       if (aggCall.getArgList().size() == 1) {
         // case we have count(column) push it as count(*) where column is not null
-        final JsonFilter matchNulls = new JsonSelector(only, null, null);
-        final JsonFilter filterOutNulls = new JsonCompositeFilter(JsonFilter.Type.NOT, matchNulls);
+        final DruidJsonFilter matchNulls = DruidJsonFilter.getSelectorFilter(only, null, null);
+        final DruidJsonFilter filterOutNulls = DruidJsonFilter.toNotDruidFilter(matchNulls);
         aggregation = new JsonFilteredAggregation(filterOutNulls,
             new JsonAggregation("count", name, only));
       } else {
@@ -1077,7 +953,8 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
     // Check for filters
     if (aggCall.hasFilter()) {
       RexNode filterNode = projects.get(aggCall.filterArg);
-      JsonFilter druidFilter = translator.toDruidFilters(projects.get(aggCall.filterArg));
+      DruidJsonFilter druidFilter = DruidJsonFilter
+          .toDruidFilters(projects.get(aggCall.filterArg), table.getRowType(), this);
       Preconditions.checkNotNull(
           druidFilter, DateTimeStringUtils.format("Druid Filter is null instead of [%s]",
               filterNode));
@@ -1192,8 +1069,8 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
       generator.writeNumber(i);
     } else if (o instanceof List) {
       writeArray(generator, (List<?>) o);
-    } else if (o instanceof Json) {
-      ((Json) o).write(generator);
+    } else if (o instanceof DruidJson) {
+      ((DruidJson) o).write(generator);
     } else {
       throw new AssertionError("not a json object: " + o);
     }
@@ -1356,190 +1233,6 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
       return fieldName;
     }
 
-    @Nullable
-    private JsonFilter toSimpleDruidFilter(RexNode e) {
-      final RexCall call;
-      if (e.isAlwaysTrue()) {
-        return JsonExpressionFilter.alwaysTrue();
-      }
-      if (e.isAlwaysFalse()) {
-        return JsonExpressionFilter.alwaysFalse();
-      }
-      switch (e.getKind()) {
-      case EQUALS:
-      case NOT_EQUALS:
-      case GREATER_THAN:
-      case GREATER_THAN_OR_EQUAL:
-      case LESS_THAN:
-      case LESS_THAN_OR_EQUAL:
-      case IN:
-      case BETWEEN:
-      case IS_NULL:
-      case IS_NOT_NULL:
-        call = (RexCall) e;
-        int posRef;
-        int posConstant;
-        if (call.getOperands().size() == 1) { // IS NULL and IS NOT NULL
-          posRef = 0;
-          posConstant = -1;
-        } else if (RexUtil.isConstant(call.getOperands().get(1))) {
-          posRef = 0;
-          posConstant = 1;
-        } else if (RexUtil.isConstant(call.getOperands().get(0))) {
-          posRef = 1;
-          posConstant = 0;
-        } else {
-          return null;
-        }
-        final boolean constantIsNumeric;
-        final RexNode posRefNode = call.getOperands().get(posRef);
-        if (posConstant != -1) {
-          final RexNode constantNode =  call.getOperands().get(posConstant);
-          constantIsNumeric = constantNode.getType().getFamily() == SqlTypeFamily.NUMERIC;
-        } else {
-          constantIsNumeric = false;
-        }
-
-        final boolean numeric = posRefNode.getType().getFamily() == SqlTypeFamily.NUMERIC
-            || constantIsNumeric;
-        boolean formatDateString = false;
-        final Granularity granularity = DruidDateTimeUtils.extractGranularity(posRefNode);
-        // in case no extraction the field will be omitted from the serialization
-        ExtractionFunction extractionFunction = null;
-        if (granularity != null) {
-          switch (posRefNode.getKind()) {
-          case EXTRACT:
-            if (!TimeExtractionFunction.isValidTimeExtract((RexCall) posRefNode)) {
-              return null;
-            }
-            extractionFunction =
-                TimeExtractionFunction.createExtractFromGranularity(granularity, timeZone);
-            break;
-          case FLOOR:
-            if (!TimeExtractionFunction.isValidTimeFloor((RexCall) posRefNode)) {
-              return null;
-            }
-            extractionFunction =
-                TimeExtractionFunction.createFloorFromGranularity(granularity, timeZone);
-            formatDateString = true;
-            break;
-
-          }
-        }
-        String dimName = tr(e, posRef, formatDateString);
-        if (dimName == null) {
-          return null;
-        }
-        if (dimName.equals(DruidConnectionImpl.DEFAULT_RESPONSE_TIMESTAMP_COLUMN)) {
-          // We need to use Druid default column name to refer to the time dimension in a filter
-          dimName = DruidTable.DEFAULT_TIMESTAMP_COLUMN;
-        }
-
-        switch (e.getKind()) {
-        case EQUALS:
-          // extractionFunction should be null because if we are using an extraction function
-          // we have guarantees about the format of the output and thus we can apply the
-          // normal selector
-          if (numeric && extractionFunction == null) {
-            String constantValue = tr(e, posConstant, formatDateString);
-            return new JsonBound(dimName, constantValue, false, constantValue, false,
-                numeric, extractionFunction);
-          }
-          return new JsonSelector(dimName, tr(e, posConstant, formatDateString),
-              extractionFunction);
-        case NOT_EQUALS:
-          // extractionFunction should be null because if we are using an extraction function
-          // we have guarantees about the format of the output and thus we can apply the
-          // normal selector
-          if (numeric && extractionFunction == null) {
-            String constantValue = tr(e, posConstant, formatDateString);
-            return new JsonCompositeFilter(JsonFilter.Type.OR,
-                new JsonBound(dimName, constantValue, true, null, false,
-                    numeric, extractionFunction),
-                new JsonBound(dimName, null, false, constantValue, true,
-                    numeric, extractionFunction));
-          }
-          return new JsonCompositeFilter(JsonFilter.Type.NOT,
-              new JsonSelector(dimName, tr(e, posConstant, formatDateString), extractionFunction));
-        case GREATER_THAN:
-          return new JsonBound(dimName, tr(e, posConstant, formatDateString),
-              true, null, false, numeric, extractionFunction);
-        case GREATER_THAN_OR_EQUAL:
-          return new JsonBound(dimName, tr(e, posConstant, formatDateString),
-              false, null, false, numeric, extractionFunction);
-        case LESS_THAN:
-          return new JsonBound(dimName, null, false,
-              tr(e, posConstant, formatDateString), true, numeric, extractionFunction);
-        case LESS_THAN_OR_EQUAL:
-          return new JsonBound(dimName, null, false,
-              tr(e, posConstant, formatDateString), false, numeric, extractionFunction);
-        case IN:
-          ImmutableList.Builder<String> listBuilder = ImmutableList.builder();
-          for (RexNode rexNode: call.getOperands()) {
-            if (rexNode.getKind() == SqlKind.LITERAL) {
-              listBuilder.add(Objects.toString(((RexLiteral) rexNode).getValue3()));
-            }
-          }
-          return new JsonInFilter(dimName, listBuilder.build(), extractionFunction);
-        case BETWEEN:
-          return new JsonBound(dimName, tr(e, 2, formatDateString), false,
-              tr(e, 3, formatDateString), false, numeric, extractionFunction);
-        case IS_NULL:
-          return new JsonSelector(dimName, null, extractionFunction);
-        case IS_NOT_NULL:
-          return new JsonCompositeFilter(JsonFilter.Type.NOT,
-              new JsonSelector(dimName, null, extractionFunction));
-        default:
-          return null;
-        }
-      default:
-        return null;
-      }
-    }
-
-    @Nullable
-    private JsonFilter toDruidFilters(final RexNode rexNode) {
-      switch (rexNode.getKind()) {
-      case IS_TRUE:
-      case IS_NOT_FALSE:
-        return toDruidFilters(Iterables.getOnlyElement(((RexCall) rexNode).getOperands()));
-      case IS_NOT_TRUE:
-      case IS_FALSE:
-        final JsonFilter simpleFilter = toDruidFilters(Iterables
-            .getOnlyElement(((RexCall) rexNode).getOperands()));
-        return simpleFilter != null ? new JsonCompositeFilter(JsonFilter.Type.NOT, simpleFilter)
-            : simpleFilter;
-      case AND:
-      case OR:
-      case NOT:
-        final RexCall call = (RexCall) rexNode;
-        final List<JsonFilter> jsonFilters = Lists.newArrayList();
-        for (final RexNode e : call.getOperands()) {
-          final JsonFilter druidFilter = toDruidFilters(e);
-          if (druidFilter == null) {
-            return null;
-          }
-          jsonFilters.add(druidFilter);
-        }
-        return new JsonCompositeFilter(JsonFilter.Type.valueOf(rexNode.getKind().name()),
-            jsonFilters);
-      default:
-        final JsonFilter simpleLeafFilter;
-        if (isValidSimpleFilter(rexNode, false)) {
-          simpleLeafFilter = toSimpleDruidFilter(rexNode);
-        } else {
-          simpleLeafFilter = null;
-        }
-        return simpleLeafFilter == null ? toDruidExpressionFilter(rexNode) : simpleLeafFilter;
-      }
-    }
-
-    @Nullable
-    private JsonFilter toDruidExpressionFilter(RexNode rexNode) {
-      final String expression = DruidExpressions.toDruidExpression(rexNode, rowType, druidQuery);
-      return expression == null ? null : new JsonExpressionFilter(expression);
-    }
-
     private String tr(RexNode call, int index, boolean formatDateString) {
       return tr(call, index, false, formatDateString);
     }
@@ -1611,14 +1304,8 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
     }
   }
 
-  /** Object that knows how to write itself to a
-   * {@link com.fasterxml.jackson.core.JsonGenerator}. */
-  public interface Json {
-    void write(JsonGenerator generator) throws IOException;
-  }
-
   /** Aggregation element of a Druid "groupBy" or "topN" query. */
-  private static class JsonAggregation implements Json {
+  private static class JsonAggregation implements DruidJson {
     final String type;
     final String name;
     final String fieldName;
@@ -1639,7 +1326,7 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
   }
 
   /** Collation element of a Druid "groupBy" query. */
-  private static class JsonLimit implements Json {
+  private static class JsonLimit implements DruidJson {
     final String type;
     final Integer limit;
     final ImmutableList<JsonCollation> collations;
@@ -1660,7 +1347,7 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
   }
 
   /** Collation element of a Druid "groupBy" query. */
-  private static class JsonCollation implements Json {
+  private static class JsonCollation implements DruidJson {
     final String dimension;
     final String direction;
     final String dimensionOrder;
@@ -1701,10 +1388,10 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
 
   /** Aggregation element that contains a filter */
   private static class JsonFilteredAggregation extends JsonAggregation {
-    final JsonFilter filter;
+    final DruidJsonFilter filter;
     final JsonAggregation aggregation;
 
-    private JsonFilteredAggregation(JsonFilter filter, JsonAggregation aggregation) {
+    private JsonFilteredAggregation(DruidJsonFilter filter, JsonAggregation aggregation) {
       // Filtered aggregations don't use the "name" and "fieldName" fields directly,
       // but rather use the ones defined in their "aggregation" field.
       super("filtered", aggregation.name, aggregation.fieldName);
@@ -1723,186 +1410,8 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
     }
   }
 
-  /** Filter element of a Druid "groupBy" or "topN" query. */
-  private abstract static class JsonFilter implements Json {
-    /**
-     * Supported filter types
-     * */
-    protected enum Type {
-      AND,
-      OR,
-      NOT,
-      SELECTOR,
-      IN,
-      BOUND,
-      EXPRESSION;
-
-      public String lowercase() {
-        return name().toLowerCase(Locale.ROOT);
-      }
-    }
-
-    final Type type;
-
-    private JsonFilter(Type type) {
-      this.type = type;
-    }
-  }
-
-  /**
-   * Druid Expression filter.
-   */
-  private static class JsonExpressionFilter extends JsonFilter {
-    private final String expression;
-
-    private JsonExpressionFilter(String expression) {
-      super(Type.EXPRESSION);
-      this.expression = Preconditions.checkNotNull(expression);
-    }
-
-    @Override public void write(JsonGenerator generator) throws IOException {
-      generator.writeStartObject();
-      generator.writeStringField("type", type.lowercase());
-      generator.writeStringField("expression", expression);
-      generator.writeEndObject();
-    }
-
-    /** We need to push to Druid an expression that always evaluates to true. */
-    public static final JsonExpressionFilter alwaysTrue() {
-      return new JsonExpressionFilter("1 == 1");
-    }
-
-    /** We need to push to Druid an expression that always evaluates to false. */
-    public static final JsonExpressionFilter alwaysFalse() {
-      return new JsonExpressionFilter("1 == 2");
-    }
-  }
-
-
-  /** Equality filter. */
-  private static class JsonSelector extends JsonFilter {
-    private final String dimension;
-    private final String value;
-    private final ExtractionFunction extractionFunction;
-
-    private JsonSelector(String dimension, String value,
-        ExtractionFunction extractionFunction) {
-      super(Type.SELECTOR);
-      this.dimension = dimension;
-      this.value = value;
-      this.extractionFunction = extractionFunction;
-    }
-
-    public void write(JsonGenerator generator) throws IOException {
-      generator.writeStartObject();
-      generator.writeStringField("type", type.lowercase());
-      generator.writeStringField("dimension", dimension);
-      generator.writeStringField("value", value);
-      writeFieldIf(generator, "extractionFn", extractionFunction);
-      generator.writeEndObject();
-    }
-  }
-
-  /** Bound filter. */
-  @VisibleForTesting
-  protected static class JsonBound extends JsonFilter {
-    private final String dimension;
-    private final String lower;
-    private final boolean lowerStrict;
-    private final String upper;
-    private final boolean upperStrict;
-    private final boolean alphaNumeric;
-    private final ExtractionFunction extractionFunction;
-
-    private JsonBound(String dimension, String lower,
-        boolean lowerStrict, String upper, boolean upperStrict,
-        boolean alphaNumeric, ExtractionFunction extractionFunction) {
-      super(Type.BOUND);
-      this.dimension = dimension;
-      this.lower = lower;
-      this.lowerStrict = lowerStrict;
-      this.upper = upper;
-      this.upperStrict = upperStrict;
-      this.alphaNumeric = alphaNumeric;
-      this.extractionFunction = extractionFunction;
-    }
-
-    public void write(JsonGenerator generator) throws IOException {
-      generator.writeStartObject();
-      generator.writeStringField("type", type.lowercase());
-      generator.writeStringField("dimension", dimension);
-      if (lower != null) {
-        generator.writeStringField("lower", lower);
-        generator.writeBooleanField("lowerStrict", lowerStrict);
-      }
-      if (upper != null) {
-        generator.writeStringField("upper", upper);
-        generator.writeBooleanField("upperStrict", upperStrict);
-      }
-      if (alphaNumeric) {
-        generator.writeStringField("ordering", "numeric");
-      } else {
-        generator.writeStringField("ordering", "lexicographic");
-      }
-      writeFieldIf(generator, "extractionFn", extractionFunction);
-      generator.writeEndObject();
-    }
-  }
-
-  /** Filter that combines other filters using a boolean operator. */
-  private static class JsonCompositeFilter extends JsonFilter {
-    private final List<? extends JsonFilter> fields;
-
-    private JsonCompositeFilter(Type type,
-        Iterable<? extends JsonFilter> fields) {
-      super(type);
-      this.fields = ImmutableList.copyOf(fields);
-    }
-
-    private JsonCompositeFilter(Type type, JsonFilter... fields) {
-      this(type, ImmutableList.copyOf(fields));
-    }
-
-    public void write(JsonGenerator generator) throws IOException {
-      generator.writeStartObject();
-      generator.writeStringField("type", type.lowercase());
-      switch (type) {
-      case NOT:
-        writeField(generator, "field", fields.get(0));
-        break;
-      default:
-        writeField(generator, "fields", fields);
-      }
-      generator.writeEndObject();
-    }
-  }
-
-  /** IN filter. */
-  protected static class JsonInFilter extends JsonFilter {
-    private final String dimension;
-    private final List<String> values;
-    private final ExtractionFunction extractionFunction;
-
-    private JsonInFilter(String dimension, List<String> values,
-        ExtractionFunction extractionFunction) {
-      super(Type.IN);
-      this.dimension = dimension;
-      this.values = values;
-      this.extractionFunction = extractionFunction;
-    }
-
-    public void write(JsonGenerator generator) throws IOException {
-      generator.writeStartObject();
-      generator.writeStringField("type", type.lowercase());
-      generator.writeStringField("dimension", dimension);
-      writeField(generator, "values", values);
-      writeFieldIf(generator, "extractionFn", extractionFunction);
-      generator.writeEndObject();
-    }
-  }
-
   /** Post-Aggregator Post aggregator abstract writer */
-  protected abstract static class JsonPostAggregation implements Json {
+  protected abstract static class JsonPostAggregation implements DruidJson {
     final String type;
     String name;
 

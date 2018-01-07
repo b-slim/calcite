@@ -49,8 +49,7 @@ public class DirectOperatorConversion implements DruidSqlOperatorConverter {
     if (druidExpressions == null) {
       return null;
     }
-    return DruidExpressions.fromExpression(
-        DruidExpressions.functionCall(druidFunctionName, druidExpressions));
+    return DruidExpressions.functionCall(druidFunctionName, druidExpressions);
   }
 }
 

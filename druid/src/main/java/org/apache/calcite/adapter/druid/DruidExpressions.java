@@ -131,30 +131,30 @@ public class DruidExpressions {
         //case the filter/project might yield to unknown let Calcite deal with this for now
         return null;
       } else if (SqlTypeName.NUMERIC_TYPES.contains(sqlTypeName)) {
-        return DruidExpressions.fromExpression(DruidExpressions.numberLiteral((Number) RexLiteral
-            .value(rexNode)));
+        return DruidExpressions.numberLiteral((Number) RexLiteral
+            .value(rexNode));
       } else if (SqlTypeFamily.INTERVAL_DAY_TIME == sqlTypeName.getFamily()) {
         // Calcite represents DAY-TIME intervals in milliseconds.
         final long milliseconds = ((Number) RexLiteral.value(rexNode)).longValue();
-        return DruidExpressions.fromExpression(DruidExpressions.numberLiteral(milliseconds));
+        return DruidExpressions.numberLiteral(milliseconds);
       } else if (SqlTypeFamily.INTERVAL_YEAR_MONTH == sqlTypeName.getFamily()) {
         // Calcite represents YEAR-MONTH intervals in months.
         final long months = ((Number) RexLiteral.value(rexNode)).longValue();
-        return DruidExpressions.fromExpression(DruidExpressions.numberLiteral(months));
+        return DruidExpressions.numberLiteral(months);
       } else if (SqlTypeName.STRING_TYPES.contains(sqlTypeName)) {
-        return DruidExpressions.fromExpression(
-            DruidExpressions.stringLiteral(RexLiteral.stringValue(rexNode)));
+        return
+            DruidExpressions.stringLiteral(RexLiteral.stringValue(rexNode));
       } else if (SqlTypeName.TIMESTAMP == sqlTypeName || SqlTypeName.DATE == sqlTypeName) {
         if (RexLiteral.isNullLiteral(rexNode)) {
           return null;
         } else {
-          return DruidExpressions.fromExpression(
+          return
               DruidExpressions.numberLiteral(
                   DruidDateTimeUtils.literalValue(
                       rexNode,
                       TimeZone.getTimeZone(
                           druidRel.getConnectionConfig().timeZone())).getMillisSinceEpoch()
-              )
+
           );
         }
       } else if (SqlTypeName.BOOLEAN == sqlTypeName) {
@@ -171,10 +171,6 @@ public class DruidExpressions {
 
   public static String fromColumn(String columnName) {
     return DateTimeStringUtils.format("\"%s\"", columnName);
-  }
-
-  public static String fromExpression(final String expression) {
-    return expression;
   }
 
   public static String nullLiteral() {
@@ -296,8 +292,8 @@ public class DruidExpressions {
         "timestamp_extract",
         ImmutableList.of(
             timeExpression,
-            DruidExpressions.fromExpression(DruidExpressions.stringLiteral(druidUnit)),
-            DruidExpressions.fromExpression(DruidExpressions.stringLiteral(timeZone.getID()))
+            DruidExpressions.stringLiteral(druidUnit),
+            DruidExpressions.stringLiteral(timeZone.getID())
         )
     );
   }

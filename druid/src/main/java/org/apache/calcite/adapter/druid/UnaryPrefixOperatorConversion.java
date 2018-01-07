@@ -57,10 +57,8 @@ public class UnaryPrefixOperatorConversion implements DruidSqlOperatorConverter 
       return null;
     }
 
-    return DruidExpressions.fromExpression(
-        DateTimeStringUtils.format(
-            "(%s %s)", druidOperator,
-            Iterables.getOnlyElement(druidExpressions)));
+    return DateTimeStringUtils
+        .format("(%s %s)", druidOperator, Iterables.getOnlyElement(druidExpressions));
   }
 }
 

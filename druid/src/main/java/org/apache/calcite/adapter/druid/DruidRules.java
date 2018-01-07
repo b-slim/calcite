@@ -231,7 +231,9 @@ public class DruidRules {
           new RexSimplify(rexBuilder, predicates, true, executor);
       final RexNode cond = simplify.simplify(filter.getCondition());
       for (RexNode e : RelOptUtil.conjunctions(cond)) {
-        if (query.isValidFilter(e, query)) {
+        DruidJsonFilter druidJsonFilter = DruidJsonFilter
+            .toDruidFilters(e, query.table.getRowType(), query);
+        if (druidJsonFilter != null) {
           validPreds.add(e);
         } else {
           nonValidPreds.add(e);
@@ -688,7 +690,9 @@ public class DruidRules {
       // into Druid
       for (Integer i : filterRefs) {
         RexNode filterNode = project.getProjects().get(i);
-        if (!query.isValidFilter(filterNode, query)) {
+        final DruidJsonFilter filter = DruidJsonFilter
+            .toDruidFilters(filterNode, query.table.getRowType(), query);
+        if (filter == null) {
           return;
         }
       }

@@ -16,12 +16,14 @@
  */
 package org.apache.calcite.adapter.druid;
 
-/**
- * Interface for Druid DimensionSpec.
- *
- * <p>DimensionSpecs define how dimension values get transformed prior to aggregation.
- */
-public interface DimensionSpec extends DruidJson {
+import com.fasterxml.jackson.core.JsonGenerator;
+
+import java.io.IOException;
+
+/** Object that knows how to write itself to a
+ * {@link com.fasterxml.jackson.core.JsonGenerator}. */
+public interface DruidJson {
+  void write(JsonGenerator generator) throws IOException;
 }
 
-// End DimensionSpec.java
+// End DruidJson.java
