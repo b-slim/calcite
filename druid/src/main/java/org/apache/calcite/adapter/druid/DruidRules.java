@@ -66,6 +66,7 @@ import org.apache.commons.lang3.tuple.ImmutableTriple;
 import org.apache.commons.lang3.tuple.Triple;
 
 import com.google.common.base.Predicate;
+import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Lists;
@@ -139,6 +140,9 @@ public class DruidRules {
 
           final CalciteConnectionConfig config = query.getConnectionConfig();
           for (AggregateCall aggregateCall : aggregate.getAggCallList()) {
+            if (aggregateCall.getArgList().size() > 1) {
+              return true;
+            }
             switch (aggregateCall.getAggregation().getKind()) {
             case COUNT:
               // Druid count aggregator can handle 3 scenarios:
@@ -232,7 +236,7 @@ public class DruidRules {
       final RexNode cond = simplify.simplify(filter.getCondition());
       for (RexNode e : RelOptUtil.conjunctions(cond)) {
         DruidJsonFilter druidJsonFilter = DruidJsonFilter
-            .toDruidFilters(e, query.table.getRowType(), query);
+            .toDruidFilters(e, filter.getInput().getRowType(), query);
         if (druidJsonFilter != null) {
           validPreds.add(e);
         } else {
@@ -331,14 +335,17 @@ public class DruidRules {
         return;
       }
 
-      if (canProjectAll(project.getProjects())) {
+      if (DruidQuery.computeProjectAsScan(project.getProjects(), query.table.getRowType(), query)
+          != null) {
         // All expressions can be pushed to Druid in their entirety.
         final RelNode newProject = project.copy(project.getTraitSet(),
-                ImmutableList.of(Util.last(query.rels)));
+            ImmutableList.of(Util.last(query.rels))
+        );
         RelNode newNode = DruidQuery.extendQuery(query, newProject);
         call.transformTo(newNode);
         return;
       }
+
       final Pair<List<RexNode>, List<RexNode>> pair =
           splitProjects(rexBuilder, query, project.getProjects());
       if (pair == null) {
@@ -364,15 +371,6 @@ public class DruidRules {
       final RelNode newProject2 = project.copy(project.getTraitSet(), newQuery, above,
               project.getRowType());
       call.transformTo(newProject2);
-    }
-
-    private static boolean canProjectAll(List<RexNode> nodes) {
-      for (RexNode e : nodes) {
-        if (!(e instanceof RexInputRef)) {
-          return false;
-        }
-      }
-      return true;
     }
 
     private static Pair<List<RexNode>, List<RexNode>> splitProjects(final RexBuilder rexBuilder,
@@ -1107,8 +1105,9 @@ public class DruidRules {
         RexNode node = project.getProjects().get(index);
         if (node instanceof RexCall) {
           RexCall call = (RexCall) node;
-          assert DruidDateTimeUtils.extractGranularity(call) != null;
-          if (call.getKind() == SqlKind.FLOOR) {
+          //assert DruidDateTimeUtils.extractGranularity(call) != null;
+          if (call.getKind() == SqlKind.FLOOR
+              && DruidDateTimeUtils.extractGranularity(call) != null) {
             newSet.addAll(RelOptUtil.InputFinder.bits(call));
           }
         }
@@ -1139,9 +1138,10 @@ public class DruidRules {
           newSet.set(((RexInputRef) node).getIndex());
         } else if (node instanceof RexCall) {
           RexCall call = (RexCall) node;
-          assert DruidDateTimeUtils.extractGranularity(call) != null;
-          // when we have extract from time columnthe rexCall is in the form of /Reinterpret$0
-          newSet.addAll(RelOptUtil.InputFinder.bits(call));
+          if (DruidDateTimeUtils.extractGranularity(call) != null) {
+            // when we have extract from time columnthe rexCall is in the form of /Reinterpret$0
+            newSet.addAll(RelOptUtil.InputFinder.bits(call));
+          }
         }
       }
       top = project.getInput();

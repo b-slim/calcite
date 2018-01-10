@@ -18,8 +18,11 @@ package org.apache.calcite.adapter.druid;
 
 import com.fasterxml.jackson.core.JsonGenerator;
 import com.google.common.base.Preconditions;
+import com.google.common.base.Strings;
 
 import java.io.IOException;
+
+import javax.annotation.Nullable;
 
 import static org.apache.calcite.adapter.druid.DruidQuery.writeField;
 import static org.apache.calcite.adapter.druid.DruidQuery.writeFieldIf;
@@ -34,16 +37,35 @@ public class ExtractionDimensionSpec implements DimensionSpec {
   private final String dimension;
   private final ExtractionFunction extractionFunction;
   private final String outputName;
+  private final DruidType outputType;
 
   public ExtractionDimensionSpec(String dimension, ExtractionFunction extractionFunction,
       String outputName) {
+    this(dimension, extractionFunction, outputName, DruidType.STRING);
+  }
+
+  public ExtractionDimensionSpec(String dimension, ExtractionFunction extractionFunction,
+      String outputName, DruidType outputType) {
     this.dimension = Preconditions.checkNotNull(dimension);
     this.extractionFunction = Preconditions.checkNotNull(extractionFunction);
     this.outputName = outputName;
+    this.outputType = outputType == null ? DruidType.STRING : outputType;
   }
 
-  public String getOutputName() {
+  @Override public String getOutputName() {
     return outputName;
+  }
+
+  @Override public DruidType getOutputType() {
+    return outputType;
+  }
+
+  @Override public ExtractionFunction getExtractionFn() {
+    return extractionFunction;
+  }
+
+  @Override public String getDimension() {
+    return dimension;
   }
 
   @Override public void write(JsonGenerator generator) throws IOException {
@@ -53,6 +75,33 @@ public class ExtractionDimensionSpec implements DimensionSpec {
     writeFieldIf(generator, "outputName", outputName);
     writeField(generator, "extractionFn", extractionFunction);
     generator.writeEndObject();
+  }
+
+  /**
+   * @param dimensionSpec Druid Dimesion spec object
+   *
+   * @return valid {@link Granularity} of floor extract or null is not possible.
+   */
+  @Nullable
+  public static Granularity toQueryGranularity(DimensionSpec dimensionSpec) {
+    if (!DruidTable.DEFAULT_TIMESTAMP_COLUMN.equals(dimensionSpec.getDimension())) {
+      // Only __time column can be substituted by granularity
+      return null;
+    }
+    final ExtractionFunction extractionFunction = dimensionSpec.getExtractionFn();
+    if (extractionFunction == null) {
+      // No Extract thus no Granularity
+      return null;
+    }
+    if (extractionFunction instanceof TimeExtractionFunction) {
+      String granularity = ((TimeExtractionFunction) extractionFunction).getGranularity();
+      String format = ((TimeExtractionFunction) extractionFunction).getFormat();
+      if (!TimeExtractionFunction.ISO_TIME_FORMAT.equals(format)) {
+        return null;
+      }
+      return Granularity.fromString(Strings.nullToEmpty(granularity));
+    }
+    return null;
   }
 
 }

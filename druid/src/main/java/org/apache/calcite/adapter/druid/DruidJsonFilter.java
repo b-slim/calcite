@@ -48,6 +48,7 @@ import javax.annotation.Nullable;
  */
 abstract class DruidJsonFilter implements DruidJson {
 
+  //@TODO move this to {@link DruidQuery}
   /**
    * @param rexNode Druid input ref node
    * @param rowType rowType
@@ -56,7 +57,7 @@ abstract class DruidJsonFilter implements DruidJson {
    * @return Druid column name or null when not possible to translate.
    */
   @Nullable
-  private static String extractColumnName(RexNode rexNode, RelDataType rowType, DruidQuery query) {
+  public static String extractColumnName(RexNode rexNode, RelDataType rowType, DruidQuery query) {
 
     if (rexNode.getKind() == SqlKind.INPUT_REF) {
       final RexInputRef ref = (RexInputRef) rexNode;
@@ -142,6 +143,7 @@ abstract class DruidJsonFilter implements DruidJson {
     return toNotDruidFilter(partialFilter);
   }
 
+  //@TODO move this to {@link DruidQuery}
   /**
    * @param rexNode    leaf Input Ref to Druid Column
    * @param rowType    row type
@@ -150,7 +152,7 @@ abstract class DruidJsonFilter implements DruidJson {
    * @return {@link Pair} of Column name and Extraction Function on the top of the input ref or
    * {@link Pair of(null, null)} when can not translate to valid Druid column
    */
-  private static Pair<String, ExtractionFunction> toDruidColumn(RexNode rexNode,
+  public static Pair<String, ExtractionFunction> toDruidColumn(RexNode rexNode,
       RelDataType rowType, DruidQuery druidQuery
   ) {
     final String columnName;
@@ -225,6 +227,7 @@ abstract class DruidJsonFilter implements DruidJson {
     return Pair.of(columnName, extractionFunction);
   }
 
+  //@TODO move this to {@link DruidQuery}
   private static boolean isValidLeafCast(RexNode rexNode) {
     assert rexNode.isA(SqlKind.CAST);
     final RexNode input = ((RexCall) rexNode).getOperands().get(0);
@@ -593,10 +596,10 @@ abstract class DruidJsonFilter implements DruidJson {
   /**
    * Druid Expression filter.
    */
-  private static class JsonExpressionFilter extends DruidJsonFilter {
+  public static class JsonExpressionFilter extends DruidJsonFilter {
     private final String expression;
 
-    private JsonExpressionFilter(String expression) {
+    JsonExpressionFilter(String expression) {
       super(Type.EXPRESSION);
       this.expression = Preconditions.checkNotNull(expression);
     }
