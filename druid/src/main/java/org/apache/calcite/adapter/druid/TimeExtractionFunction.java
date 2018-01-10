@@ -87,6 +87,14 @@ public class TimeExtractionFunction implements ExtractionFunction {
     generator.writeEndObject();
   }
 
+  public String getFormat() {
+    return format;
+  }
+  public String getGranularity() {
+    return granularity;
+  }
+
+
   /**
    * Creates the default time format extraction function.
    *

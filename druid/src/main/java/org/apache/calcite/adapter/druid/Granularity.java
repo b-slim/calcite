@@ -18,6 +18,8 @@ package org.apache.calcite.adapter.druid;
 
 import java.util.Locale;
 
+import javax.annotation.Nullable;
+
 /** Granularity of a Druid query. */
 public enum Granularity {
   ALL,
@@ -33,6 +35,21 @@ public enum Granularity {
 
   /** JSON attribute value in a Druid query. */
   public final String value = name().toLowerCase(Locale.ROOT);
+
+  /**
+   * @param text string to parse as granualrity
+   *
+   * @return granularity matching input or null
+   */
+  @Nullable
+  public static Granularity fromString(String text) {
+    for (Granularity granularity : Granularity.values()) {
+      if (granularity.value.equalsIgnoreCase(text)) {
+        return granularity;
+      }
+    }
+    return null;
+  }
 }
 
 // End Granularity.java
