@@ -16,7 +16,6 @@
  */
 package org.apache.calcite.adapter.druid;
 
-import org.apache.calcite.config.CalciteConnectionConfig;
 import org.apache.calcite.plan.RelOptCluster;
 import org.apache.calcite.plan.RelOptPredicateList;
 import org.apache.calcite.plan.RelOptRule;
@@ -50,11 +49,8 @@ import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.rex.RexShuttle;
 import org.apache.calcite.rex.RexSimplify;
 import org.apache.calcite.rex.RexUtil;
-import org.apache.calcite.runtime.PredicateImpl;
 import org.apache.calcite.sql.SqlKind;
 import org.apache.calcite.sql.fun.SqlStdOperatorTable;
-import org.apache.calcite.sql.type.SqlTypeFamily;
-import org.apache.calcite.sql.type.SqlTypeName;
 import org.apache.calcite.tools.RelBuilder;
 import org.apache.calcite.tools.RelBuilderFactory;
 import org.apache.calcite.util.ImmutableBitSet;
@@ -65,8 +61,6 @@ import org.apache.calcite.util.trace.CalciteTrace;
 import org.apache.commons.lang3.tuple.ImmutableTriple;
 import org.apache.commons.lang3.tuple.Triple;
 
-import com.google.common.base.Predicate;
-import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Lists;
@@ -129,75 +123,6 @@ public class DruidRules {
           PROJECT_SORT_TRANSPOSE,
           SORT,
           SORT_PROJECT_TRANSPOSE);
-
-  /** Predicate that returns whether Druid can not handle an aggregate. */
-  private static final Predicate<Triple<Aggregate, RelNode, DruidQuery>> BAD_AGG =
-      new PredicateImpl<Triple<Aggregate, RelNode, DruidQuery>>() {
-        public boolean test(Triple<Aggregate, RelNode, DruidQuery> triple) {
-          final Aggregate aggregate = triple.getLeft();
-          final RelNode node = triple.getMiddle();
-          final DruidQuery query = triple.getRight();
-
-          final CalciteConnectionConfig config = query.getConnectionConfig();
-          for (AggregateCall aggregateCall : aggregate.getAggCallList()) {
-            if (aggregateCall.getArgList().size() > 1) {
-              return true;
-            }
-            switch (aggregateCall.getAggregation().getKind()) {
-            case COUNT:
-              // Druid count aggregator can handle 3 scenarios:
-              // 1. count(distinct col) when approximate results
-              //    are acceptable and col is not a metric.
-              //    Note that exact count(distinct column) is handled
-              //    by being rewritten into group by followed by count
-              // 2. count(*)
-              // 3. count(column)
-
-              if (checkAggregateOnMetric(ImmutableBitSet.of(aggregateCall.getArgList()),
-                      node, query)) {
-                return true;
-              }
-              // case count(*)
-              if (aggregateCall.getArgList().isEmpty()) {
-                continue;
-              }
-              // case count(column)
-              if (aggregateCall.getArgList().size() == 1 && !aggregateCall.isDistinct()) {
-                continue;
-              }
-              // case count(distinct and is approximate)
-              if (aggregateCall.isDistinct()
-                      && (aggregateCall.isApproximate() || config.approximateDistinctCount())) {
-                continue;
-              }
-              return true;
-            case SUM:
-            case SUM0:
-            case MIN:
-            case MAX:
-              final RelDataType type = aggregateCall.getType();
-              final SqlTypeName sqlTypeName = type.getSqlTypeName();
-              if (SqlTypeFamily.APPROXIMATE_NUMERIC.getTypeNames().contains(sqlTypeName)
-                      || SqlTypeFamily.INTEGER.getTypeNames().contains(sqlTypeName)) {
-                continue;
-              } else if (SqlTypeFamily.EXACT_NUMERIC.getTypeNames().contains(sqlTypeName)) {
-                // Decimal
-                assert sqlTypeName == SqlTypeName.DECIMAL;
-                if (type.getScale() == 0 || config.approximateDecimal()) {
-                  // If scale is zero or we allow approximating decimal, we can proceed
-                  continue;
-                }
-              }
-              // Cannot handle this aggregate function
-              return true;
-            default:
-              // Cannot handle this aggregate function
-              return true;
-            }
-          }
-          return false;
-        }
-      };
 
   /**
    * Rule to push a {@link org.apache.calcite.rel.core.Filter} into a {@link DruidQuery}.
@@ -626,27 +551,45 @@ public class DruidRules {
     public void onMatch(RelOptRuleCall call) {
       final Aggregate aggregate = call.rel(0);
       final DruidQuery query = call.rel(1);
+      final RelNode topDruidNode = query.getTopNode();
+      final Project project = topDruidNode instanceof Project ? (Project) topDruidNode : null;
       if (!DruidQuery.isValidSignature(query.signature() + 'a')) {
         return;
       }
       if (aggregate.indicator
-              || aggregate.getGroupSets().size() != 1
-              || BAD_AGG.apply(ImmutableTriple.of(aggregate, (RelNode) aggregate, query))
-              || !validAggregate(aggregate, query)) {
+          || aggregate.getGroupSets().size() != 1) {
         return;
       }
-      final RelNode newAggregate = aggregate.copy(aggregate.getTraitSet(),
-              ImmutableList.of(Util.last(query.rels)));
+      if (DruidQuery
+          .computeProjectGroupSet(project, aggregate.getGroupSet(), query.table.getRowType(), query)
+          == null) {
+        return;
+      }
+      final List<String> aggNames = Util
+          .skip(aggregate.getRowType().getFieldNames(), aggregate.getGroupSet().cardinality());
+      if (DruidQuery.computeDruidJsonAgg(aggregate.getAggCallList(), aggNames, project, query)
+          == null) {
+        return;
+      }
+      if (isAggregateOnTimeColumn(aggregate, query)) {
+        /*@TODO not sure why this condition is here ? how about MIN(EXTRACT(Month from __time))
+        see org.apache.calcite.test.DruidAdapterIT.testAggOnTimeExtractColumn()
+        Jesus or Julian might have more insights
+        */
+        //return;
+      }
+      final RelNode newAggregate = aggregate
+          .copy(aggregate.getTraitSet(), ImmutableList.of(query.getTopNode()));
       call.transformTo(DruidQuery.extendQuery(query, newAggregate));
     }
 
     /* Check whether agg functions reference timestamp */
-    private static boolean validAggregate(Aggregate aggregate, DruidQuery query) {
+    private static boolean isAggregateOnTimeColumn(Aggregate aggregate, DruidQuery query) {
       ImmutableBitSet.Builder builder = ImmutableBitSet.builder();
       for (AggregateCall aggCall : aggregate.getAggCallList()) {
         builder.addAll(aggCall.getArgList());
       }
-      return !checkTimestampRefOnQuery(builder.build(), query.getTopNode(), query);
+      return checkTimestampRefOnQuery(builder.build(), query.getTopNode(), query);
     }
   }
 
@@ -676,36 +619,26 @@ public class DruidRules {
       if (!DruidQuery.isValidSignature(query.signature() + 'p' + 'a')) {
         return;
       }
-
-      int timestampIdx = validProject(project, query);
-      List<Integer> filterRefs = getFilterRefs(aggregate.getAggCallList());
-
-      if (timestampIdx == -1 && filterRefs.size() == 0) {
+      if (aggregate.indicator
+          || aggregate.getGroupSets().size() != 1) {
         return;
       }
-
-      // Check that the filters that the Aggregate calls refer to are valid filters can be pushed
-      // into Druid
-      for (Integer i : filterRefs) {
-        RexNode filterNode = project.getProjects().get(i);
-        final DruidJsonFilter filter = DruidJsonFilter
-            .toDruidFilters(filterNode, query.table.getRowType(), query);
-        if (filter == null) {
-          return;
-        }
+      if (DruidQuery
+          .computeProjectGroupSet(project, aggregate.getGroupSet(), query.table.getRowType(), query)
+          == null) {
+        return;
       }
-
-      if (aggregate.indicator
-              || aggregate.getGroupSets().size() != 1
-              || BAD_AGG.apply(ImmutableTriple.of(aggregate, (RelNode) project, query))
-              || !validAggregate(aggregate, timestampIdx, filterRefs.size())) {
+      final List<String> aggNames = Util
+          .skip(aggregate.getRowType().getFieldNames(), aggregate.getGroupSet().cardinality());
+      if (DruidQuery.computeDruidJsonAgg(aggregate.getAggCallList(), aggNames, project, query)
+          == null) {
         return;
       }
       final RelNode newProject = project.copy(project.getTraitSet(),
               ImmutableList.of(Util.last(query.rels)));
       final RelNode newAggregate = aggregate.copy(aggregate.getTraitSet(),
               ImmutableList.of(newProject));
-
+      List<Integer> filterRefs = getFilterRefs(aggregate.getAggCallList());
       final DruidQuery query2;
       if (filterRefs.size() > 0) {
         query2 = optimizeFilteredAggregations(call, query, (Project) newProject,
@@ -899,84 +832,6 @@ public class DruidRules {
       return refs;
     }
 
-    /* To be a valid Project, we allow it to contain references, and a single call
-     * to a FLOOR function on the timestamp column OR valid time EXTRACT on the timestamp column.
-     * Returns the reference to the timestamp, if any. */
-    private static int validProject(Project project, DruidQuery query) {
-      List<RexNode> nodes = project.getProjects();
-      int idxTimestamp = -1;
-      boolean hasFloor = false;
-      for (int i = 0; i < nodes.size(); i++) {
-        final RexNode e = nodes.get(i);
-        if (e instanceof RexCall) {
-          // It is a call, check that it is EXTRACT and follow-up conditions
-          final RexCall call = (RexCall) e;
-          if (DruidDateTimeUtils.extractGranularity(call) == null) {
-            return -1;
-          }
-          if (idxTimestamp != -1 && hasFloor) {
-            // Already one usage of timestamp column
-            return -1;
-          }
-          switch (call.getKind()) {
-          case FLOOR:
-            hasFloor = true;
-            if (!(call.getOperands().get(0) instanceof RexInputRef)) {
-              return -1;
-            }
-            if (!TimeExtractionFunction.isValidTimeFloor(call)) {
-              return -1;
-            }
-            final RexInputRef ref = (RexInputRef) call.getOperands().get(0);
-            if (!(checkTimestampRefOnQuery(ImmutableBitSet.of(ref.getIndex()),
-                query.getTopNode(),
-                query))) {
-              return -1;
-            }
-            idxTimestamp = i;
-            break;
-          case EXTRACT:
-            idxTimestamp = RelOptUtil.InputFinder.bits(call).asList().get(0);
-            if (!TimeExtractionFunction.isValidTimeExtract(call)) {
-              return -1;
-            }
-            break;
-          default:
-            throw new AssertionError();
-          }
-          continue;
-        }
-        if (!(e instanceof RexInputRef)) {
-          // It needs to be a reference
-          return -1;
-        }
-        final RexInputRef ref = (RexInputRef) e;
-        if (checkTimestampRefOnQuery(ImmutableBitSet.of(ref.getIndex()),
-                query.getTopNode(), query)) {
-          if (idxTimestamp != -1) {
-            // Already one usage of timestamp column
-            return -1;
-          }
-          idxTimestamp = i;
-        }
-      }
-      return idxTimestamp;
-    }
-
-    private static boolean validAggregate(Aggregate aggregate, int idx, int numFilterRefs) {
-      if (numFilterRefs > 0 && idx < 0) {
-        return true;
-      }
-      if (!aggregate.getGroupSet().get(idx)) {
-        return false;
-      }
-      for (AggregateCall aggCall : aggregate.getAggCallList()) {
-        if (aggCall.getArgList().contains(idx)) {
-          return false;
-        }
-      }
-      return true;
-    }
   }
 
   /**
