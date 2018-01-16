@@ -4388,6 +4388,17 @@ public class DruidAdapterIT {
             + "2992-01-10T00:00:00.000Z]], projects=[[$90]], groups=[{}], aggs=[[COUNT(), SUM($0)]])")
         .returnsOrdered("EXPR$0=652067");
   }
+
+  @Test
+  public void testSubStringOverPostAggregates() {
+    final String sql =
+        "SELECT \"product_id\", SUBSTRING(\"product_id\" from 1 for 2) FROM " + FOODMART_TABLE
+            + " GROUP BY \"product_id\"";
+    sql(sql, FOODMART).explainContains("PLAN=EnumerableInterpreter\n"
+        + "  BindableProject(product_id=[$0], EXPR$1=[SUBSTRING($0, 1, 2)])\n"
+        + "    DruidQuery(table=[[foodmart, foodmart]], intervals=[[1900-01-09T00:00:00.000Z/"
+        + "2992-01-10T00:00:00.000Z]], groups=[{1}], aggs=[[]])");
+  }
 }
 
 // End DruidAdapterIT.java

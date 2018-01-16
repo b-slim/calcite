@@ -968,7 +968,7 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
         generator.writeStringField("dataSource", druidTable.dataSource);
         generator.writeStringField("granularity", finalGranularity.value);
         writeField(generator, "dimension", dimensions.get(0));
-        writeField(generator, "virtualColumns",
+        writeFieldIf(generator, "virtualColumns",
             virtualColumnList.size() > 0 ? virtualColumnList : null
         );
         generator.writeStringField("metric", topNMetricColumnName);
@@ -987,7 +987,7 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
         generator.writeStringField("dataSource", druidTable.dataSource);
         generator.writeStringField("granularity", finalGranularity.value);
         writeField(generator, "dimensions", dimensions);
-        writeField(generator, "virtualColumns",
+        writeFieldIf(generator, "virtualColumns",
             virtualColumnList.size() > 0 ? virtualColumnList : null
         );
         writeFieldIf(generator, "limitSpec", limit);
@@ -1052,7 +1052,7 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
         generator.writeStringField("dataSource", dataSource);
         writeField(generator, "intervals", intervals);
         writeFieldIf(generator, "filter", jsonFilter);
-        writeField(generator, "virtualColumns",
+        writeFieldIf(generator, "virtualColumns",
             virtualColumnList.size() > 0 ? virtualColumnList : null
         );
         writeField(generator, "columns", columns);
