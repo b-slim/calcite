@@ -968,10 +968,9 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
         generator.writeStringField("dataSource", druidTable.dataSource);
         generator.writeStringField("granularity", finalGranularity.value);
         writeField(generator, "dimension", dimensions.get(0));
-        if (virtualColumnList.size() > 0) {
-          //@TODO FIX tHIS added to make minimal changes to tests
-          writeField(generator, "virtualColumns", virtualColumnList);
-        }
+        writeField(generator, "virtualColumns",
+            virtualColumnList.size() > 0 ? virtualColumnList : null
+        );
         generator.writeStringField("metric", topNMetricColumnName);
         writeFieldIf(generator, "filter", jsonFilter);
         writeField(generator, "aggregations", aggregations);
@@ -988,10 +987,9 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
         generator.writeStringField("dataSource", druidTable.dataSource);
         generator.writeStringField("granularity", finalGranularity.value);
         writeField(generator, "dimensions", dimensions);
-        if (virtualColumnList.size() > 0) {
-          //@TODO FIX tHIS
-          writeField(generator, "virtualColumns", virtualColumnList);
-        }
+        writeField(generator, "virtualColumns",
+            virtualColumnList.size() > 0 ? virtualColumnList : null
+        );
         writeFieldIf(generator, "limitSpec", limit);
         writeFieldIf(generator, "filter", jsonFilter);
         writeField(generator, "aggregations", aggregations);
@@ -1054,10 +1052,9 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
         generator.writeStringField("dataSource", dataSource);
         writeField(generator, "intervals", intervals);
         writeFieldIf(generator, "filter", jsonFilter);
-        if (virtualColumnList.size() > 0) {
-          //@TODO FIX tHIS
-          writeField(generator, "virtualColumns", virtualColumnList);
-        }
+        writeField(generator, "virtualColumns",
+            virtualColumnList.size() > 0 ? virtualColumnList : null
+        );
         writeField(generator, "columns", columns);
         generator.writeStringField("resultFormat", "compactedList");
         if (fetchLimit != null) {

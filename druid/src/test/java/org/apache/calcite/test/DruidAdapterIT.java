@@ -4376,6 +4376,18 @@ public class DruidAdapterIT {
         .returnsOrdered("EXPR$0=24441; EXPR$1=86829")
         .queryContains(druidChecker(query));
   }
+
+  @Test
+  public void testCastOverPostAggregates() {
+    final String sql =
+        "SELECT CAST(COUNT(*) + SUM(\"store_sales\") as INTEGER) FROM " + FOODMART_TABLE;
+    sql(sql, FOODMART)
+        .explainContains("PLAN=EnumerableInterpreter\n"
+            + "  BindableProject(EXPR$0=[CAST(+($0, $1)):INTEGER])\n"
+            + "    DruidQuery(table=[[foodmart, foodmart]], intervals=[[1900-01-09T00:00:00.000Z/"
+            + "2992-01-10T00:00:00.000Z]], projects=[[$90]], groups=[{}], aggs=[[COUNT(), SUM($0)]])")
+        .returnsOrdered("EXPR$0=652067");
+  }
 }
 
 // End DruidAdapterIT.java
