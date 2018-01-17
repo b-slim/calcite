@@ -323,7 +323,7 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
       if (columnName == null) {
         return null;
       }
-      //this a nasty hack since calcite has this un-direct renaming of timestamp to __time
+      //calcite has this un-direct renaming of timestampFieldName to native druid `__time`
       if (query.getDruidTable().timestampFieldName.equals(columnName)) {
         return DruidTable.DEFAULT_TIMESTAMP_COLUMN;
       }
