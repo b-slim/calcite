@@ -16,7 +16,6 @@
  */
 package org.apache.calcite.util;
 
-import java.util.Locale;
 import java.util.TimeZone;
 
 /**
