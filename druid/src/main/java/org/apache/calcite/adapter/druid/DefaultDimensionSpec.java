@@ -47,7 +47,7 @@ public class DefaultDimensionSpec implements DimensionSpec {
     generator.writeStartObject();
     generator.writeStringField("type", "default");
     generator.writeStringField("dimension", dimension);
-    //@TODO fixme, only commented to match tests will fix it once we finish review
+    //@TODO, only commented to match tests will fix it once we finish review
     //generator.writeStringField("outputName", outputName);
     //generator.writeStringField("outputType", outputType.name());
     generator.writeEndObject();

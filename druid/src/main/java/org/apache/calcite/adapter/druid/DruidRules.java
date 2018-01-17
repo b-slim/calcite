@@ -259,7 +259,7 @@ public class DruidRules {
         return;
       }
 
-      if (DruidQuery.computeProjectAsScan(project.getProjects(), query.table.getRowType(), query)
+      if (DruidQuery.computeProjectAsScan(project, query.table.getRowType(), query)
           != null) {
         // All expressions can be pushed to Druid in their entirety.
         final RelNode newProject = project.copy(project.getTraitSet(),
@@ -573,7 +573,7 @@ public class DruidRules {
       /*if (isAggregateOnTimeColumn(aggregate, query)) {
         @TODO not sure why this condition is here ? how about MIN(EXTRACT(Month from __time))
         see org.apache.calcite.test.DruidAdapterIT.testAggOnTimeExtractColumn()
-        Jesus or Julian might have more insights
+        Double check with Jesus or Julian might have more insights
         return;
       }*/
       final RelNode newAggregate = aggregate
@@ -947,7 +947,7 @@ public class DruidRules {
           // it is not reference from table scan thus can not be time column
           return false;
         }
-        Pair column = DruidJsonFilter
+        Pair column = DruidQuery
             .toDruidColumn(project.getProjects().get(index),
                 query.table.getRowType(), query
             );

@@ -87,6 +87,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.TimeZone;
 import java.util.regex.Pattern;
 
 import javax.annotation.Nullable;
@@ -189,6 +190,148 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
         + "can not be null");
     assert isValid(Litmus.THROW, null);
   }
+
+  /**
+   * @param rexNode    leaf Input Ref to Druid Column
+   * @param rowType    row type
+   * @param druidQuery druid query
+   *
+   * @return {@link Pair} of Column name and Extraction Function on the top of the input ref or
+   * {@link Pair of(null, null)} when can not translate to valid Druid column
+   */
+  public static Pair<String, ExtractionFunction> toDruidColumn(RexNode rexNode,
+      RelDataType rowType, DruidQuery druidQuery
+  ) {
+    final String columnName;
+    final ExtractionFunction extractionFunction;
+    final Granularity granularity;
+    switch (rexNode.getKind()) {
+    case INPUT_REF:
+      columnName = extractColumnName(rexNode, rowType, druidQuery);
+      //@TODO we can remove this ugly check by treating druid time columns as LONG
+      if (rexNode.getType().getFamily() == SqlTypeFamily.DATE
+          || rexNode.getType().getFamily() == SqlTypeFamily.TIMESTAMP) {
+        extractionFunction = TimeExtractionFunction
+            .createDefault(druidQuery.getConnectionConfig().timeZone());
+      } else {
+        extractionFunction = null;
+      }
+      break;
+    case EXTRACT:
+      granularity = DruidDateTimeUtils.extractGranularity(rexNode);
+      if (granularity == null) {
+        // unknown Granularity
+        return Pair.of(null, null);
+      }
+      if (!TimeExtractionFunction.isValidTimeExtract((RexCall) rexNode)) {
+        return Pair.of(null, null);
+      }
+      extractionFunction =
+          TimeExtractionFunction.createExtractFromGranularity(granularity,
+              druidQuery.getConnectionConfig().timeZone()
+          );
+      columnName =
+          extractColumnName(((RexCall) rexNode).getOperands().get(1), rowType, druidQuery);
+
+      break;
+    case FLOOR:
+      granularity = DruidDateTimeUtils.extractGranularity(rexNode);
+      if (granularity == null) {
+        // unknown Granularity
+        return Pair.of(null, null);
+      }
+      if (!TimeExtractionFunction.isValidTimeFloor((RexCall) rexNode)) {
+        return Pair.of(null, null);
+      }
+      extractionFunction =
+          TimeExtractionFunction
+              .createFloorFromGranularity(granularity, druidQuery.getConnectionConfig().timeZone());
+      columnName =
+          extractColumnName(((RexCall) rexNode).getOperands().get(0), rowType, druidQuery);
+      break;
+    case CAST:
+      // CASE we have a cast over RexRef. Check that cast is valid
+      if (!isValidLeafCast(rexNode)) {
+        return Pair.of(null, null);
+      }
+      columnName =
+          extractColumnName(((RexCall) rexNode).getOperands().get(0), rowType, druidQuery);
+      // CASE CAST to TIME/DATE need to make sure that we have valid extraction fn
+      final SqlTypeName toTypeName = rexNode.getType().getSqlTypeName();
+      if (toTypeName.getFamily() == SqlTypeFamily.TIMESTAMP
+          || toTypeName.getFamily() == SqlTypeFamily.DATETIME) {
+        extractionFunction = TimeExtractionFunction.translateCastToTimeExtract(rexNode,
+            TimeZone.getTimeZone(druidQuery.getConnectionConfig().timeZone())
+        );
+        if (extractionFunction == null) {
+          // no extraction Function means cast is not valid thus bail out
+          return Pair.of(null, null);
+        }
+      } else {
+        extractionFunction = null;
+      }
+      break;
+    default:
+      return Pair.of(null, null);
+    }
+    return Pair.of(columnName, extractionFunction);
+  }
+
+  private static boolean isValidLeafCast(RexNode rexNode) {
+    assert rexNode.isA(SqlKind.CAST);
+    final RexNode input = ((RexCall) rexNode).getOperands().get(0);
+    if (!input.isA(SqlKind.INPUT_REF)) {
+      // it is not a leaf cast don't bother going further.
+      return false;
+    }
+    final SqlTypeName toTypeName = rexNode.getType().getSqlTypeName();
+    if (toTypeName.getFamily() == SqlTypeFamily.CHARACTER) {
+      // CAST of input to character type
+      return true;
+    }
+    if (toTypeName.getFamily() == SqlTypeFamily.NUMERIC) {
+      // CAST of input to numeric type, it is part of a bounded comparison
+      return true;
+    }
+    if (toTypeName.getFamily() == SqlTypeFamily.TIMESTAMP
+        || toTypeName.getFamily() == SqlTypeFamily.DATETIME) {
+      // CAST of literal to timestamp type
+      return true;
+    }
+    if (toTypeName.getFamily().contains(input.getType())) {
+      //same type it is okay to push it
+      return true;
+    }
+    // Currently other CAST operations cannot be pushed to Druid
+    return false;
+
+  }
+
+  /**
+   * @param rexNode Druid input ref node
+   * @param rowType rowType
+   * @param query Druid Query
+   *
+   * @return Druid column name or null when not possible to translate.
+   */
+  @Nullable
+  public static String extractColumnName(RexNode rexNode, RelDataType rowType, DruidQuery query) {
+
+    if (rexNode.getKind() == SqlKind.INPUT_REF) {
+      final RexInputRef ref = (RexInputRef) rexNode;
+      final String columnName = rowType.getFieldNames().get(ref.getIndex());
+      if (columnName == null) {
+        return null;
+      }
+      //this a nasty hack since calcite has this un-direct renaming of timestamp to __time
+      if (query.getDruidTable().timestampFieldName.equals(columnName)) {
+        return DruidTable.DEFAULT_TIMESTAMP_COLUMN;
+      }
+      return columnName;
+    }
+    return null;
+  }
+
   /** Returns a string describing the operations inside this query.
    *
    * <p>For example, "sfpaol" means {@link TableScan} (s)
@@ -550,24 +693,28 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
    * Translates list of projects to Druid Column names and Virtual Columns if any
    * We can not use {@link Pair#zip(Object[], Object[])}, since size can be different
    *
-   * @param projects       List of projects to translate.
+   * @param projectRel       Project Rel
    *
-   * @param druidQuery Druid quey
+   * @param druidQuery Druid query
    *
    * @return Pair of list of Druid Columns and Expression Virtual Columns or null when can not
    * translate one of the projects.
    */
   @Nullable
   protected static Pair<List<String>, List<VirtualColumn>> computeProjectAsScan(
-      List<RexNode> projects, RelDataType inputRowType,
+     @Nullable Project projectRel, RelDataType inputRowType,
       DruidQuery druidQuery
   ) {
+    if (projectRel == null) {
+      return null;
+    }
     final Set<String> usedFieldNames = new HashSet<>();
     final ImmutableList.Builder<VirtualColumn> virtualColumnsBuilder = ImmutableList.builder();
     final ImmutableList.Builder<String> projectedColumnsBuilder = ImmutableList.builder();
+    final List<RexNode> projects = projectRel.getProjects();
     for (RexNode project : projects) {
-      Pair<String, ExtractionFunction> druidColumn = DruidJsonFilter
-          .toDruidColumn(project, inputRowType, druidQuery);
+      Pair<String, ExtractionFunction> druidColumn =
+          toDruidColumn(project, inputRowType, druidQuery);
       if (druidColumn.left == null || druidColumn.right != null) {
         // It is a complex project pushed as expression
         final String expression = DruidExpressions
@@ -623,8 +770,8 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
         project = projectNode.getProjects().get(groupKey);
       }
 
-      Pair<String, ExtractionFunction> druidColumn = DruidJsonFilter
-          .toDruidColumn(project, inputRowType, druidQuery);
+      Pair<String, ExtractionFunction> druidColumn =
+          toDruidColumn(project, inputRowType, druidQuery);
       if (druidColumn.left != null && druidColumn.right == null) {
         //SIMPLE INPUT REF
         dimensionSpec = new DefaultDimensionSpec(druidColumn.left, druidColumn.left,
@@ -739,8 +886,8 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
           final RelDataType inputRowType = project.getInput().getRowType();
           if (rexNode.isA(SqlKind.INPUT_REF)) {
             expression = null;
-            fieldName = DruidJsonFilter
-                .extractColumnName(rexNode, inputRowType, druidQuery);
+            fieldName =
+                extractColumnName(rexNode, inputRowType, druidQuery);
           } else {
             expression = DruidExpressions
                 .toDruidExpression(rexNode, inputRowType, druidQuery);
@@ -788,7 +935,7 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
       if (project != null) {
         //project some fields only
         Pair<List<String>, List<VirtualColumn>> projectResult = computeProjectAsScan(
-            project.getProjects(), project.getInput().getRowType(), this);
+            project, project.getInput().getRowType(), this);
         columnsNames = projectResult.left;
         virtualColumnList.addAll(projectResult.right);
       } else {
@@ -821,11 +968,10 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
     Direction timeSeriesDirection = null;
     final JsonLimit limit;
     String topNMetricColumnName = null;
-    final RelDataType inputRowType =
-        project == null ? table.getRowType() : project.getInput().getRowType();
+    final RelDataType aggInputRowType = table.getRowType();
     List<String> fieldNames = new ArrayList<>();
     Pair<List<DimensionSpec>, List<VirtualColumn>> projectGroupSet = computeProjectGroupSet(
-        project, groupSet, inputRowType, this);
+        project, groupSet, aggInputRowType, this);
 
     final List<DimensionSpec> groupByKeyDims = projectGroupSet.left;
     final List<VirtualColumn> virtualColumnList = projectGroupSet.right;
@@ -1396,6 +1542,7 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
     private ColumnMetaData.Rep getPrimitive(RelDataTypeField field) {
       switch (field.getType().getSqlTypeName()) {
       case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
+      case TIMESTAMP:
         return ColumnMetaData.Rep.JAVA_SQL_TIMESTAMP;
       case BIGINT:
         return ColumnMetaData.Rep.LONG;
