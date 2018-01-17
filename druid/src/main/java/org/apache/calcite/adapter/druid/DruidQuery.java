@@ -84,6 +84,7 @@ import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -330,6 +331,13 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
       return columnName;
     }
     return null;
+  }
+
+  /**
+   * Equivalent of String.format(Locale.ENGLISH, message, formatArgs).
+   */
+  protected static String format(String message, Object... formatArgs) {
+    return String.format(Locale.ENGLISH, message, formatArgs);
   }
 
   /** Returns a string describing the operations inside this query.

@@ -88,13 +88,6 @@ public class DateTimeStringUtils {
     return false;
   }
 
-  /**
-   * Equivalent of String.format(Locale.ENGLISH, message, formatArgs).
-   */
-  public static String format(String message, Object... formatArgs) {
-    return String.format(Locale.ENGLISH, message, formatArgs);
-  }
-
 }
 
 // End DateTimeStringUtils.java

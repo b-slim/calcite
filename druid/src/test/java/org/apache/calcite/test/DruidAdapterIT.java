@@ -4461,8 +4461,10 @@ public class DruidAdapterIT {
         + " CAST(SUBSTRING(CAST(CAST(\"foodmart\".\"timestamp\" AS TIMESTAMP) AS VARCHAR) from 12 for 2 ) AS INT),"
         + "  MINUTE(\"foodmart\".\"timestamp\"), EXTRACT(HOUR FROM \"timestamp\")) LIMIT 1";
     sql(sql, FOODMART)
-        .returnsOrdered("HR_T_TIMESTAMP_OK=0; MI_T_TIMESTAMP_OK=0; SUM_T_OTHER_OK=565238.1299999986; HR_T_TIMESTAMP_OK2=0")
-        .explainContains("BindableProject(HR_T_TIMESTAMP_OK=[$0], MI_T_TIMESTAMP_OK=[$1], SUM_T_OTHER_OK=[$3], HR_T_TIMESTAMP_OK2=[$2])\n"
+        .returnsOrdered("HR_T_TIMESTAMP_OK=0; MI_T_TIMESTAMP_OK=0; "
+            + "SUM_T_OTHER_OK=565238.1299999986; HR_T_TIMESTAMP_OK2=0")
+        .explainContains("BindableProject(HR_T_TIMESTAMP_OK=[$0], MI_T_TIMESTAMP_OK=[$1],"
+            + " SUM_T_OTHER_OK=[$3], HR_T_TIMESTAMP_OK2=[$2])\n"
             + "    DruidQuery(table=[[foodmart, foodmart]], intervals=[[1900-01-09T00:00:00.000Z/"
             + "2992-01-10T00:00:00.000Z]], projects=[[CAST(SUBSTRING(CAST(CAST($0):TIMESTAMP(0) "
             + "NOT NULL):VARCHAR CHARACTER SET \"ISO-8859-1\" COLLATE \"ISO-8859-1$en_US$primary\" "
@@ -4478,7 +4480,8 @@ public class DruidAdapterIT {
         + " FROM \"foodmart\" GROUP BY SECOND(\"timestamp\"), MINUTE(\"timestamp\"))"
         + " LIMIT_ZERO LIMIT 1";
     sql(sql, FOODMART)
-        .returnsOrdered("SC_T_TIMESTAMP_OK=0; MI_T_TIMESTAMP_OK=0; SUM_STORE_SALES=565238.1299999986")
+        .returnsOrdered("SC_T_TIMESTAMP_OK=0; MI_T_TIMESTAMP_OK=0; "
+            + "SUM_STORE_SALES=565238.1299999986")
         .explainContains("PLAN=EnumerableInterpreter\n"
             + "  DruidQuery(table=[[foodmart, foodmart]], intervals=[[1900-01-09T00:00:00.000Z/"
             + "2992-01-10T00:00:00.000Z]], projects=[[EXTRACT(FLAG(SECOND), $0), "
@@ -4496,7 +4499,8 @@ public class DruidAdapterIT {
         + " QUARTER(\"__time\") order by sum_added) LIMIT_ZERO LIMIT 1";
 
     sql(sql, WIKI_AUTO2)
-        .returnsOrdered("QUARTER=3; WEEK=37; DAYOFWEEK=6; DAYOFMONTH=12; DAYOFYEAR=255; SUM_ADDED=9385573")
+        .returnsOrdered("QUARTER=3; WEEK=37; DAYOFWEEK=6; DAYOFMONTH=12;"
+            + " DAYOFYEAR=255; SUM_ADDED=9385573")
         .explainContains("PLAN=EnumerableInterpreter\n"
             + "  BindableProject(QUARTER=[$4], WEEK=[$0], DAYOFWEEK=[$1], DAYOFMONTH=[$2], DAYOFYEAR=[$3], SUM_ADDED=[$5])\n"
             + "    BindableSort(fetch=[1])\n"
