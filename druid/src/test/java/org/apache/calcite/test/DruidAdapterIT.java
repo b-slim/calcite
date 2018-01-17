@@ -4388,12 +4388,11 @@ public class DruidAdapterIT {
     final String sql =
         "SELECT CAST(COUNT(*) + SUM(\"store_sales\") as INTEGER) FROM " + FOODMART_TABLE;
     sql(sql, FOODMART)
-        .returnsOrdered("EXPR$0=652067");
-        /*.explainContains("PLAN=EnumerableInterpreter\n"
+        .returnsOrdered("EXPR$0=652067")
+        .explainContains("PLAN=EnumerableInterpreter\n"
             + "  BindableProject(EXPR$0=[CAST(+($0, $1)):INTEGER])\n"
             + "    DruidQuery(table=[[foodmart, foodmart]], intervals=[[1900-01-09T00:00:00.000Z/"
-            + "2992-01-10T00:00:00.000Z]], projects=[[$90]], groups=[{}], aggs=[[COUNT(), SUM($0)]])");*/
-
+            + "2992-01-10T00:00:00.000Z]], projects=[[$90]], groups=[{}], aggs=[[COUNT(), SUM($0)]])");
   }
 
   @Test

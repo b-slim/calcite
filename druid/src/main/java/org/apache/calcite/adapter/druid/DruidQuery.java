@@ -702,8 +702,7 @@ public class DruidQuery extends AbstractRelNode implements BindableRel {
    */
   @Nullable
   protected static Pair<List<String>, List<VirtualColumn>> computeProjectAsScan(
-     @Nullable Project projectRel, RelDataType inputRowType,
-      DruidQuery druidQuery
+      @Nullable Project projectRel, RelDataType inputRowType, DruidQuery druidQuery
   ) {
     if (projectRel == null) {
       return null;
