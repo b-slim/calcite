@@ -37,7 +37,7 @@ public enum Granularity {
   public final String value = name().toLowerCase(Locale.ROOT);
 
   /**
-   * @param text string to parse as granualrity
+   * @param text string to parse as granularity
    *
    * @return granularity matching input or null
    */
